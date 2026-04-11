@@ -2,13 +2,21 @@
 
 /* TODO
     arrows
-    arrows animation
-    arrows random accuracy
     shake to clear & reshoot
+        pull animation
     levels
         keep it still (and upright if gyro)
         battery fully charged?
         compass
+
+    leave holes behind?
+    random animation for
+        hanger
+        bouncer
+        pass-through
+    special animation for robin hoods
+    screen shake on hit?
+    vibe on hit
 */
 
 #include <pebble.h>
@@ -17,8 +25,6 @@
 #include "Macros.h"
 
 static Window *s_window;
-static Layer *s_target_layer;
-static Layer *s_arrow_layer;
 
 typedef struct State {
     int hour;
@@ -55,8 +61,10 @@ static GPoint point_from_angle(GPoint origin, int32_t angle, int32_t radius) {
 
 
 /******************************************************************************
- Graphics
+ Background graphics
 ******************************************************************************/
+
+static Layer *s_target_layer;
 
 static void draw_target(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
@@ -93,20 +101,137 @@ static void draw_target(Layer *layer, GContext *ctx) {
     // }
 }
 
-void draw_arrow(Layer *layer, GContext *ctx) {
+
+/******************************************************************************
+ Arrow graphics
+******************************************************************************/
+
+static Layer *s_arrow_layer;
+
+// Context required to draw an arrow animation sequence
+typedef struct ArrowContext {
+    int16_t angle;  // in trigangle units
+    int32_t length;
+    int32_t distance;
+    GColor8 color;
+    int16_t frame;
+} ArrowContext;
+
+#define ARROW_NUM_FRAMES (4)
+
+static ArrowContext s_arrow_sec;
+
+// Return the hit location of the arrow relative to `layer`
+static GPoint arrow_nose(const Layer* layer, const ArrowContext* arrow) {
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
+    return point_from_angle(center, arrow->angle, arrow->distance);
+}
 
-    int16_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
-    int32_t length = 50;
-    int32_t distance = rand() % (center.x - (length / 2));
+// Draw the arrow embedded in the target
+static void draw_arrow_hit(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg) {
 
-    const GPoint nose = point_from_angle(center, angle, distance);
-    const GPoint tail = point_from_angle(center, angle, distance + length);
+    // 3 degrees is required to visibly wobble when the arrow is straight vertical/horizontal
+    const int16_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
+    const bool is_straight = (
+        MIN(ABSDIFF(angle_deg_wrap_90, 0),
+            ABSDIFF(angle_deg_wrap_90, 90)
+        ) < ((360 / 60) / 2)
+    );
+    if (is_straight) {
+        wobble_deg = wobble_deg * 3;
+    }
 
+    const int16_t shaft_angle = arrow->angle + DEG_TO_TRIGANGLE(wobble_deg);
+
+    // shaft
+    const GPoint nose = arrow_nose(layer, arrow);
+    const GPoint tail = point_from_angle(nose, shaft_angle, arrow->length);
     graphics_context_set_stroke_width(ctx, 2);
     graphics_context_set_stroke_color(ctx, GColorDarkGray);
     graphics_draw_line(ctx, nose, tail);
+
+    // fletch
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_context_set_stroke_color(ctx, arrow->color);
+    const int16_t nock_len = 4;
+    const int16_t fletch_len = 7;  // both the length of each line and the length along the shaft
+    for (int16_t dist_from_end = nock_len; dist_from_end < (fletch_len + nock_len); dist_from_end += 2) {
+        const GPoint base = point_from_angle(nose, shaft_angle, arrow->length - dist_from_end);
+        for (int16_t dir = -1; dir <= 1; dir += 2) {
+            const GPoint tip = point_from_angle(base, shaft_angle + DEG_TO_TRIGANGLE(dir * 45), fletch_len);
+            graphics_draw_line(ctx, base, tip);
+        }
+    }
+}
+
+// The initial swooshy speed arrival line prior to hit
+static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
+    const GPoint nose = arrow_nose(layer, arrow);
+    const int16_t offscreen = 200;
+    const GPoint tail = point_from_angle(nose, arrow->angle, offscreen);
+
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_context_set_stroke_color(ctx, GColorDarkGray);
+    graphics_draw_line(ctx, nose, tail);
+}
+
+// Wobble anticlockwise
+static void arrow_frame_2(Layer *layer, GContext *ctx, ArrowContext* arrow) {
+    draw_arrow_hit(layer, ctx, arrow, -1);
+}
+
+// Wobble clockwise
+static void arrow_frame_3(Layer *layer, GContext *ctx, ArrowContext* arrow) {
+    draw_arrow_hit(layer, ctx, arrow, 1);
+}
+
+// Final resting state
+static void arrow_frame_4(Layer *layer, GContext *ctx, ArrowContext* arrow) {
+    draw_arrow_hit(layer, ctx, arrow, 0);
+}
+
+static void arrow_nextframe(void* context) {
+    ArrowContext* arrow = (ArrowContext*)context;
+    arrow->frame ++;
+    if (arrow->frame < ARROW_NUM_FRAMES) {
+        app_timer_register(50, &arrow_nextframe, &s_arrow_sec);
+    }
+    layer_mark_dirty(s_arrow_layer);
+}
+
+// start a new arrow shoot sequence
+static void arrow_shoot(ArrowContext* arrow, int16_t angle, int32_t length, int32_t distance) {
+    arrow->angle = angle;
+    arrow->length = length;
+    arrow->distance = distance;
+    arrow->frame = 0;
+    arrow->color = (GColor8){.argb=rand() % UINT8_MAX};  // TODO limit colours to nice bright ones or signify hour/min/sec
+
+    arrow_nextframe(arrow);
+}
+
+// callback to render s_arrow_layer
+static void arrow_canvas(Layer* layer, GContext* ctx) {
+    if (s_arrow_sec.frame) {
+        switch(s_arrow_sec.frame) {
+        case 1:
+            arrow_frame_1(layer, ctx, &s_arrow_sec);
+            break;
+        case 2:
+            arrow_frame_2(layer, ctx, &s_arrow_sec);
+            break;
+        case 3:
+            arrow_frame_3(layer, ctx, &s_arrow_sec);
+            break;
+        case 4:
+            arrow_frame_4(layer, ctx, &s_arrow_sec);
+            break;
+        default:
+            ASSERT(false);
+            break;
+        }
+    }
 }
 
 
@@ -118,7 +243,13 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     s_state.hour = tick_time->tm_hour % 12;
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
-    layer_mark_dirty(s_arrow_layer);
+
+    const int32_t length = 50;
+    const int16_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
+    const GRect bounds = layer_get_bounds(s_arrow_layer);
+    const GPoint center = grect_center_point(&bounds);
+    const int32_t distance = rand() % (center.x - (length / 2));
+    arrow_shoot(&s_arrow_sec, angle, length, distance);
 }
 
 
@@ -135,7 +266,7 @@ static void main_window_load(Window *window) {
     layer_add_child(window_layer, s_target_layer);
 
     s_arrow_layer = layer_create(layer_get_frame(window_layer));
-    layer_set_update_proc(s_arrow_layer, draw_arrow);
+    layer_set_update_proc(s_arrow_layer, arrow_canvas);
     layer_add_child(window_layer, s_arrow_layer);
 
     tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
