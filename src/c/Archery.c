@@ -154,7 +154,7 @@ static GPoint arrow_tip(const Layer* layer, const ArrowContext* arrow) {
 }
 
 // Draw the arrow. Return true if it was on-screen.
-static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg) {
+static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg, bool point) {
 
     // 3 degrees is required to visibly wobble when the arrow is straight vertical/horizontal
     const int32_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
@@ -173,8 +173,20 @@ static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t
     const GPoint tip = arrow_tip(layer, arrow);
     const GPoint tail = point_from_angle(tip, shaft_angle, arrow->length);
     graphics_context_set_stroke_width(ctx, 2);
-    graphics_context_set_stroke_color(ctx, GColorDarkGray);
+    graphics_context_set_stroke_color(ctx, GColorWindsorTan);
     graphics_draw_line(ctx, tip, tail);
+
+    // point
+    if (point) {
+        graphics_context_set_stroke_color(ctx, GColorLightGray);
+
+        const GPoint shaft_end = point_from_angle(tip, shaft_angle, -4);
+        graphics_draw_line(ctx, tip, shaft_end);
+
+        const GPoint point_end = point_from_angle(tip, shaft_angle, -6);
+        graphics_context_set_stroke_width(ctx, 1);
+        graphics_draw_line(ctx, shaft_end, point_end);
+    }
 
     // fletch
     graphics_context_set_stroke_width(ctx, 1);
@@ -210,17 +222,17 @@ static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
 
 // Wobble anticlockwise
 static void arrow_frame_2(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    draw_arrow(layer, ctx, arrow, -1);
+    draw_arrow(layer, ctx, arrow, -1, false);
 }
 
 // Wobble clockwise
 static void arrow_frame_3(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    draw_arrow(layer, ctx, arrow, 1);
+    draw_arrow(layer, ctx, arrow, 1, false);
 }
 
 // Final resting state
 static void arrow_frame_4(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    draw_arrow(layer, ctx, arrow, 0);
+    draw_arrow(layer, ctx, arrow, 0, false);
 }
 
 static void arrow_nextframe(void* context) {
@@ -242,9 +254,7 @@ static void arrow_pull(ArrowContext* original_arrow) {
 
     LOG("PULL #%u", s_arrows_falling_index);
     // pull out in the direction of the arrow
-    const int16_t depth = 5;
-    arrow->length += depth;
-    arrow->velocity = point_from_angle(GPointZero, arrow->angle, depth * 2);
+    arrow->velocity = point_from_angle(GPointZero, arrow->angle, 10);
 }
 
 // Start a new arrow shoot sequence
@@ -324,7 +334,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
                 }
             }
 
-            if (draw_arrow(layer, ctx, arrow, 0)) {
+            if (draw_arrow(layer, ctx, arrow, 0, true)) {
                 still_falling = true;
             } else {
                 arrow->frame = 0;
