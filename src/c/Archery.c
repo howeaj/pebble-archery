@@ -51,11 +51,12 @@ static inline void graphics_color_rect(GContext *ctx, GRect rect, uint16_t corne
     graphics_fill_rect(ctx, rect, 0, GCornerNone);
 }
 
-/// Return a GPoint that is `radius` away from `origin` at `angle`.
-static GPoint point_from_angle(GPoint origin, int32_t angle, int32_t radius) {
+/// Return a GPoint that is `distance` away from `origin` at `angle`.
+/// If `origin` is 0, this is equivalent to converting `angle` to a vector of magnitude `distance`.
+static GPoint point_from_angle(GPoint origin, int32_t angle, int32_t distance) {
     return (GPoint) {
-        .x = (int16_t)((sin_lookup(angle) * radius) / TRIG_MAX_RATIO) + origin.x,
-        .y = (int16_t)((-cos_lookup(angle) * radius) / TRIG_MAX_RATIO) + origin.y
+        .x = (int16_t)((sin_lookup(angle) * distance) / TRIG_MAX_RATIO) + origin.x,
+        .y = (int16_t)((-cos_lookup(angle) * distance) / TRIG_MAX_RATIO) + origin.y
     };
 }
 
@@ -115,22 +116,30 @@ typedef struct ArrowContext {
     int32_t length;  // of shaft
     int32_t distance;  // from centre
     GColor8 color;  // of fletchings
+
+    // for falling
+    GPoint offset;  // offset from original hit location
+    GPoint velocity;
 } ArrowContext;
 
 #define MAX_ARROWS (30)
 #define ARROW_NUM_FRAMES (4)
+#define GRAVITY (1)
 
 static ArrowContext s_arrows[MAX_ARROWS];
+static ArrowContext s_arrows_falling[MAX_ARROWS];
+static size_t s_arrows_falling_index = 0;  // the next slot in which to place a falling arrow
 
 // Return the hit location of the arrow relative to `layer`
 static GPoint arrow_nose(const Layer* layer, const ArrowContext* arrow) {
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
-    return point_from_angle(center, arrow->angle, arrow->distance);
+    GPoint loc = point_from_angle(center, arrow->angle, arrow->distance);
+    return (GPoint){loc.x + arrow->offset.x, loc.y + arrow->offset.y};
 }
 
-// Draw the arrow embedded in the target
-static void draw_arrow_hit(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg) {
+// Draw the arrow. Return true if it was on-screen.
+static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg) {
 
     // 3 degrees is required to visibly wobble when the arrow is straight vertical/horizontal
     const int16_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
@@ -164,9 +173,12 @@ static void draw_arrow_hit(Layer *layer, GContext *ctx, ArrowContext* arrow, int
             graphics_draw_line(ctx, base, tip);
         }
     }
+
+    const GRect bounds = layer_get_bounds(layer);
+    return grect_contains_point(&bounds, &nose) || grect_contains_point(&bounds, &tail);
 }
 
-// The initial swooshy speed arrival line prior to hit
+// Draw the initial swooshy speed arrival line prior to hit
 static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     const GPoint nose = arrow_nose(layer, arrow);
     const int16_t offscreen = 200;
@@ -179,31 +191,48 @@ static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
 
 // Wobble anticlockwise
 static void arrow_frame_2(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    draw_arrow_hit(layer, ctx, arrow, -1);
+    draw_arrow(layer, ctx, arrow, -1);
 }
 
 // Wobble clockwise
 static void arrow_frame_3(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    draw_arrow_hit(layer, ctx, arrow, 1);
+    draw_arrow(layer, ctx, arrow, 1);
 }
 
 // Final resting state
 static void arrow_frame_4(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    draw_arrow_hit(layer, ctx, arrow, 0);
+    draw_arrow(layer, ctx, arrow, 0);
 }
 
 static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
-        app_timer_register((arrow->frame < 1) ? 500 : 50, &arrow_nextframe, arrow);
+        app_timer_register((arrow->frame < 1) ? 300 : 50, &arrow_nextframe, arrow);
     }
     layer_mark_dirty(s_arrow_layer);
+}
+
+// Start a new arrow removal sequence
+static void arrow_pull(ArrowContext* original_arrow) {
+    // move the arrow from s_arrows to s_arrows_falling
+    s_arrows_falling[s_arrows_falling_index] = *original_arrow;
+    ArrowContext *arrow = &s_arrows_falling[s_arrows_falling_index];
+    s_arrows_falling_index = (s_arrows_falling_index + 1) % MAX_ARROWS;
+    original_arrow->frame = 0;
+
+    // pull out in the direction of the arrow
+    const int16_t depth = 5;
+    arrow->length += depth;
+    arrow->velocity = point_from_angle(GPointZero, arrow->angle, depth * 2);
 }
 
 // Start a new arrow shoot sequence
 static void arrow_shoot(ArrowContext* arrow, int16_t angle, int32_t length, int32_t distance, int16_t delay) {
     ASSERT(delay >= 0);
+
+    arrow_pull(arrow);
+
     arrow->angle = angle;
     arrow->length = length;
     arrow->distance = distance;
@@ -213,8 +242,7 @@ static void arrow_shoot(ArrowContext* arrow, int16_t angle, int32_t length, int3
     arrow_nextframe(arrow);
 }
 
-// Callback to render s_arrow_layer
-static void arrow_canvas(Layer* layer, GContext* ctx) {
+static void animate_shots(Layer* layer, GContext* ctx) {
     for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
         ArrowContext* const arrow = &s_arrows[i];
         if (arrow->frame) {
@@ -239,6 +267,42 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
     }
 }
 
+// Callback for timer to schedule the next falling animation update
+static void continue_falling(void* context) {
+    layer_mark_dirty(s_arrow_layer);
+}
+
+static void animate_fall(Layer* layer, GContext* ctx) {
+    bool still_falling = false;
+    for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
+        ArrowContext* const arrow = &s_arrows_falling[i];
+        if (arrow->frame) {
+            // update location and velocity
+            arrow->offset.x += arrow->velocity.x;
+            arrow->offset.y += arrow->velocity.y;
+            arrow->velocity.y += 2;  // gravity
+            if (ABS(arrow->velocity.x) > 2) {  // air resistance
+                arrow->velocity.x -= SIGN(arrow->velocity.x);
+            }
+
+            if (draw_arrow(layer, ctx, arrow, 0)) {
+                still_falling = true;
+            } else {
+                arrow->frame = 0;
+            }
+        }
+    }
+    if (still_falling) {
+        app_timer_register(33, &continue_falling, NULL);  // 30fps
+    }
+}
+
+// Callback to render s_arrow_layer
+static void arrow_canvas(Layer* layer, GContext* ctx) {
+    animate_shots(layer, ctx);
+    animate_fall(layer, ctx);
+}
+
 
 /******************************************************************************
  Handlers
@@ -254,12 +318,12 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 
     int16_t delay = 0;
 
-    if (units_changed & HOUR_UNIT) {
-        const int32_t length = 50;
-        const int16_t angle = s_state.hour * (TRIG_MAX_ANGLE / (HOURS_PER_DAY / 2));
+    if (units_changed & SECOND_UNIT) {
+        const int16_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
+        const int32_t length = 70;
         const int32_t distance = rand() % (center.x - (length / 2));
-        arrow_shoot(&s_arrows[0], angle, length, distance, delay);
-        ++delay;
+        arrow_shoot(&s_arrows[2], angle, length, distance, delay);
+        delay++;
     }
 
     if (units_changed & MINUTE_UNIT) {
@@ -267,15 +331,15 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
         const int32_t length = 70;
         const int32_t distance = rand() % (center.x - (length / 2));
         arrow_shoot(&s_arrows[1], angle, length, distance, delay);
-        ++delay;
+        delay++;
     }
 
-    if (units_changed & SECOND_UNIT) {
-        const int16_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
-        const int32_t length = 70;
+    if (units_changed & HOUR_UNIT) {
+        const int32_t length = 50;
+        const int16_t angle = s_state.hour * (TRIG_MAX_ANGLE / (HOURS_PER_DAY / 2));
         const int32_t distance = rand() % (center.x - (length / 2));
-        arrow_shoot(&s_arrows[2], angle, length, distance, delay);
-        ++delay;
+        arrow_shoot(&s_arrows[0], angle, length, distance, delay);
+        delay++;
     }
 }
 
@@ -286,7 +350,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 
 static void main_window_load(Window *window) {
     TRACE("main_window_load");
-    Layer *window_layer = window_get_root_layer(window);
+    Layer * const window_layer = window_get_root_layer(window);
 
     s_target_layer = layer_create(layer_get_frame(window_layer));
     layer_set_update_proc(s_target_layer, draw_target);
@@ -301,7 +365,7 @@ static void main_window_load(Window *window) {
     // accel_tap_service_subscribe();
     // battery_state_service_subscribe();
 
-    time_t now = time(NULL);
+    const time_t now = time(NULL);
     tick_handler(localtime(&now), HOUR_UNIT | MINUTE_UNIT);
 }
 
