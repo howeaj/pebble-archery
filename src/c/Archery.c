@@ -1,23 +1,21 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
-    shake to clear & reshoot
-        pull animation
-        shake too hard -> target falls off
     levels
         keep it still (and upright if gyro)
         battery fully charged?
         compass
 
     leave holes behind?
+    special animation for robin hoods
     random animation for
         hanger
         bouncer
         pass-through
-    special animation for robin hoods
     screen shake on hit?
     vibe on hit
 
+    shake too hard -> target falls off
     collision between shots and falling arrows (difficult)
 
     user config options (silly)
@@ -365,7 +363,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     const GRect bounds = layer_get_bounds(s_arrow_layer);
     const GPoint center = grect_center_point(&bounds);
 
-    int16_t delay = 0;
+    int16_t delay = 1;
 
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
@@ -392,6 +390,16 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     }
 }
 
+static void reshoot_all_arrows(void) {
+    const time_t now = time(NULL);
+    tick_handler(localtime(&now), HOUR_UNIT | MINUTE_UNIT);
+}
+
+static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
+    TRACE("accel_tap_handler");
+    reshoot_all_arrows();
+}
+
 
 /******************************************************************************
  Main
@@ -410,12 +418,11 @@ static void main_window_load(Window *window) {
     layer_add_child(window_layer, s_arrow_layer);
 
     tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
-    // battery_state_service_subscribe();
-    // accel_tap_service_subscribe();
+    accel_tap_service_subscribe(accel_tap_handler);
+    // compass_service_subscribe();
     // battery_state_service_subscribe();
 
-    const time_t now = time(NULL);
-    tick_handler(localtime(&now), HOUR_UNIT | MINUTE_UNIT);
+    reshoot_all_arrows();
 }
 
 static void main_window_unload(Window *window) {
@@ -425,9 +432,9 @@ static void main_window_unload(Window *window) {
     layer_destroy(s_arrow_layer);
 
     tick_timer_service_unsubscribe();
+    accel_tap_service_unsubscribe();
     // battery_state_service_unsubscribe();
     // compass_service_unsubscribe();
-    // accel_tap_service_unsubscribe();
 }
 
 static void init(void) {
