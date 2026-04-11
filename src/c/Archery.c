@@ -379,14 +379,17 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
         const int32_t distance = rand() % (center.x - (length / 2));
         arrow_shoot(&s_arrows[1], angle, length, distance, delay);
         delay++;
-    }
 
-    if (units_changed & HOUR_UNIT) {  // TODO update every 15 minutes?
-        const int32_t angle = s_state.hour * (TRIG_MAX_ANGLE / (HOURS_PER_DAY / 2));
-        const int32_t length = 50;
-        const int32_t distance = rand() % (center.x - (length / 2));
-        arrow_shoot(&s_arrows[0], angle, length, distance, delay);
-        delay++;
+        { // hours
+            const int32_t angle = (
+                ((s_state.hour * MINUTES_PER_HOUR) + s_state.min)
+                * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
+            );
+            const int32_t length = 50;
+            const int32_t distance = rand() % (center.x - (length / 2));
+            arrow_shoot(&s_arrows[0], angle, length, distance, delay);
+            delay++;
+        }
     }
 }
 
