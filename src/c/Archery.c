@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
-    arrows
     shake to clear & reshoot
         pull animation
+        shake too hard -> target falls off
     levels
         keep it still (and upright if gyro)
         battery fully charged?
@@ -110,16 +110,17 @@ static Layer *s_arrow_layer;
 
 // Context required to draw an arrow animation sequence
 typedef struct ArrowContext {
+    int16_t frame;  // which frame of animation is it on. 0 for nothing.
     int16_t angle;  // in trigangle units
-    int32_t length;
-    int32_t distance;
-    GColor8 color;
-    int16_t frame;
+    int32_t length;  // of shaft
+    int32_t distance;  // from centre
+    GColor8 color;  // of fletchings
 } ArrowContext;
 
+#define MAX_ARROWS (30)
 #define ARROW_NUM_FRAMES (4)
 
-static ArrowContext s_arrow_sec;
+static ArrowContext s_arrows[MAX_ARROWS];
 
 // Return the hit location of the arrow relative to `layer`
 static GPoint arrow_nose(const Layer* layer, const ArrowContext* arrow) {
@@ -195,41 +196,45 @@ static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
-        app_timer_register(50, &arrow_nextframe, &s_arrow_sec);
+        app_timer_register((arrow->frame < 1) ? 500 : 50, &arrow_nextframe, arrow);
     }
     layer_mark_dirty(s_arrow_layer);
 }
 
-// start a new arrow shoot sequence
-static void arrow_shoot(ArrowContext* arrow, int16_t angle, int32_t length, int32_t distance) {
+// Start a new arrow shoot sequence
+static void arrow_shoot(ArrowContext* arrow, int16_t angle, int32_t length, int32_t distance, int16_t delay) {
+    ASSERT(delay >= 0);
     arrow->angle = angle;
     arrow->length = length;
     arrow->distance = distance;
-    arrow->frame = 0;
+    arrow->frame = 0 - delay;
     arrow->color = (GColor8){.argb=rand() % UINT8_MAX};  // TODO limit colours to nice bright ones or signify hour/min/sec
 
     arrow_nextframe(arrow);
 }
 
-// callback to render s_arrow_layer
+// Callback to render s_arrow_layer
 static void arrow_canvas(Layer* layer, GContext* ctx) {
-    if (s_arrow_sec.frame) {
-        switch(s_arrow_sec.frame) {
-        case 1:
-            arrow_frame_1(layer, ctx, &s_arrow_sec);
-            break;
-        case 2:
-            arrow_frame_2(layer, ctx, &s_arrow_sec);
-            break;
-        case 3:
-            arrow_frame_3(layer, ctx, &s_arrow_sec);
-            break;
-        case 4:
-            arrow_frame_4(layer, ctx, &s_arrow_sec);
-            break;
-        default:
-            ASSERT(false);
-            break;
+    for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
+        ArrowContext* const arrow = &s_arrows[i];
+        if (arrow->frame) {
+            switch(arrow->frame) {
+            case 1:
+                arrow_frame_1(layer, ctx, arrow);
+                break;
+            case 2:
+                arrow_frame_2(layer, ctx, arrow);
+                break;
+            case 3:
+                arrow_frame_3(layer, ctx, arrow);
+                break;
+            case 4:
+                arrow_frame_4(layer, ctx, arrow);
+                break;
+            default:
+                ASSERT(false);
+                break;
+            }
         }
     }
 }
@@ -244,12 +249,34 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
 
-    const int32_t length = 50;
-    const int16_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
     const GRect bounds = layer_get_bounds(s_arrow_layer);
     const GPoint center = grect_center_point(&bounds);
-    const int32_t distance = rand() % (center.x - (length / 2));
-    arrow_shoot(&s_arrow_sec, angle, length, distance);
+
+    int16_t delay = 0;
+
+    if (units_changed & HOUR_UNIT) {
+        const int32_t length = 50;
+        const int16_t angle = s_state.hour * (TRIG_MAX_ANGLE / (HOURS_PER_DAY / 2));
+        const int32_t distance = rand() % (center.x - (length / 2));
+        arrow_shoot(&s_arrows[0], angle, length, distance, delay);
+        ++delay;
+    }
+
+    if (units_changed & MINUTE_UNIT) {
+        const int16_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
+        const int32_t length = 70;
+        const int32_t distance = rand() % (center.x - (length / 2));
+        arrow_shoot(&s_arrows[1], angle, length, distance, delay);
+        ++delay;
+    }
+
+    if (units_changed & SECOND_UNIT) {
+        const int16_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
+        const int32_t length = 70;
+        const int32_t distance = rand() % (center.x - (length / 2));
+        arrow_shoot(&s_arrows[2], angle, length, distance, delay);
+        ++delay;
+    }
 }
 
 
@@ -273,6 +300,9 @@ static void main_window_load(Window *window) {
     // battery_state_service_subscribe();
     // accel_tap_service_subscribe();
     // battery_state_service_subscribe();
+
+    time_t now = time(NULL);
+    tick_handler(localtime(&now), HOUR_UNIT | MINUTE_UNIT);
 }
 
 static void main_window_unload(Window *window) {
