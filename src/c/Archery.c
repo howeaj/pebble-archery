@@ -17,6 +17,12 @@
     special animation for robin hoods
     screen shake on hit?
     vibe on hit
+
+    collision between shots and falling arrows (difficult)
+
+    user config options (silly)
+        carbon/aluminium/wooden arrows
+        different faces
 */
 
 #include <pebble.h>
@@ -60,6 +66,14 @@ static GPoint point_from_angle(GPoint origin, int32_t angle, int32_t distance) {
     };
 }
 
+// Normalize an angle to the range [0, TRIG_MAX_ANGLE] (from trig.c)
+static int32_t normalize_angle(int32_t angle) {
+    int32_t normalized_angle = ABS(angle) % TRIG_MAX_ANGLE;
+    if (angle < 0) {
+        normalized_angle = TRIG_MAX_ANGLE - normalized_angle;
+    }
+    return normalized_angle;
+}
 
 /******************************************************************************
  Background graphics
@@ -112,13 +126,14 @@ static Layer *s_arrow_layer;
 // Context required to draw an arrow animation sequence
 typedef struct ArrowContext {
     int16_t frame;  // which frame of animation is it on. 0 for nothing.
-    int16_t angle;  // in trigangle units
+    int32_t angle;  // in trigangle units
     int32_t length;  // of shaft
     int32_t distance;  // from centre
     GColor8 color;  // of fletchings
 
     // for falling
-    GPoint offset;  // offset from original hit location
+    GPoint offset_pos;  // offset from original hit location
+    int32_t offset_angle;  // offset from original shaft angle
     GPoint velocity;
 } ArrowContext;
 
@@ -130,19 +145,19 @@ static ArrowContext s_arrows[MAX_ARROWS];
 static ArrowContext s_arrows_falling[MAX_ARROWS];
 static size_t s_arrows_falling_index = 0;  // the next slot in which to place a falling arrow
 
-// Return the hit location of the arrow relative to `layer`
-static GPoint arrow_nose(const Layer* layer, const ArrowContext* arrow) {
+// Return the tip location of the arrow relative to `layer`
+static GPoint arrow_tip(const Layer* layer, const ArrowContext* arrow) {
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
     GPoint loc = point_from_angle(center, arrow->angle, arrow->distance);
-    return (GPoint){loc.x + arrow->offset.x, loc.y + arrow->offset.y};
+    return (GPoint){loc.x + arrow->offset_pos.x, loc.y + arrow->offset_pos.y};
 }
 
 // Draw the arrow. Return true if it was on-screen.
 static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg) {
 
     // 3 degrees is required to visibly wobble when the arrow is straight vertical/horizontal
-    const int16_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
+    const int32_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
     const bool is_straight = (
         MIN(ABSDIFF(angle_deg_wrap_90, 0),
             ABSDIFF(angle_deg_wrap_90, 90)
@@ -152,22 +167,22 @@ static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t
         wobble_deg = wobble_deg * 3;
     }
 
-    const int16_t shaft_angle = arrow->angle + DEG_TO_TRIGANGLE(wobble_deg);
+    const int32_t shaft_angle = arrow->angle + arrow->offset_angle + DEG_TO_TRIGANGLE(wobble_deg);
 
     // shaft
-    const GPoint nose = arrow_nose(layer, arrow);
-    const GPoint tail = point_from_angle(nose, shaft_angle, arrow->length);
+    const GPoint tip = arrow_tip(layer, arrow);
+    const GPoint tail = point_from_angle(tip, shaft_angle, arrow->length);
     graphics_context_set_stroke_width(ctx, 2);
     graphics_context_set_stroke_color(ctx, GColorDarkGray);
-    graphics_draw_line(ctx, nose, tail);
+    graphics_draw_line(ctx, tip, tail);
 
     // fletch
     graphics_context_set_stroke_width(ctx, 1);
     graphics_context_set_stroke_color(ctx, arrow->color);
-    const int16_t nock_len = 4;
-    const int16_t fletch_len = 7;  // both the length of each line and the length along the shaft
-    for (int16_t dist_from_end = nock_len; dist_from_end < (fletch_len + nock_len); dist_from_end += 2) {
-        const GPoint base = point_from_angle(nose, shaft_angle, arrow->length - dist_from_end);
+    const int32_t nock_len = 4;
+    const int32_t fletch_len = 7;  // both the length of each line and the length along the shaft
+    for (int32_t dist_from_end = nock_len; dist_from_end < (fletch_len + nock_len); dist_from_end += 2) {
+        const GPoint base = point_from_angle(tip, shaft_angle, arrow->length - dist_from_end);
         for (int16_t dir = -1; dir <= 1; dir += 2) {
             const GPoint tip = point_from_angle(base, shaft_angle + DEG_TO_TRIGANGLE(dir * 45), fletch_len);
             graphics_draw_line(ctx, base, tip);
@@ -175,18 +190,22 @@ static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t
     }
 
     const GRect bounds = layer_get_bounds(layer);
-    return grect_contains_point(&bounds, &nose) || grect_contains_point(&bounds, &tail);
+
+    // It would be more accurate to check for intersection between the shaft and lower edge
+    // to avoid arrows disappearing early when crossing the corner
+    // but due to the way the arrows fall, they don't often do so in a noticeable way.
+    return grect_contains_point(&bounds, &tip) || grect_contains_point(&bounds, &tail);
 }
 
 // Draw the initial swooshy speed arrival line prior to hit
 static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    const GPoint nose = arrow_nose(layer, arrow);
-    const int16_t offscreen = 200;
-    const GPoint tail = point_from_angle(nose, arrow->angle, offscreen);
+    const GPoint tip = arrow_tip(layer, arrow);
+    const int32_t offscreen = 200;
+    const GPoint tail = point_from_angle(tip, arrow->angle, offscreen);
 
     graphics_context_set_stroke_width(ctx, 1);
     graphics_context_set_stroke_color(ctx, GColorDarkGray);
-    graphics_draw_line(ctx, nose, tail);
+    graphics_draw_line(ctx, tip, tail);
 }
 
 // Wobble anticlockwise
@@ -221,6 +240,7 @@ static void arrow_pull(ArrowContext* original_arrow) {
     s_arrows_falling_index = (s_arrows_falling_index + 1) % MAX_ARROWS;
     original_arrow->frame = 0;
 
+    LOG("PULL #%u", s_arrows_falling_index);
     // pull out in the direction of the arrow
     const int16_t depth = 5;
     arrow->length += depth;
@@ -228,7 +248,7 @@ static void arrow_pull(ArrowContext* original_arrow) {
 }
 
 // Start a new arrow shoot sequence
-static void arrow_shoot(ArrowContext* arrow, int16_t angle, int32_t length, int32_t distance, int16_t delay) {
+static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int32_t distance, int16_t delay) {
     ASSERT(delay >= 0);
 
     arrow_pull(arrow);
@@ -277,12 +297,31 @@ static void animate_fall(Layer* layer, GContext* ctx) {
     for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
         ArrowContext* const arrow = &s_arrows_falling[i];
         if (arrow->frame) {
-            // update location and velocity
-            arrow->offset.x += arrow->velocity.x;
-            arrow->offset.y += arrow->velocity.y;
+            // location
+            arrow->offset_pos.x += arrow->velocity.x;
+            arrow->offset_pos.y += arrow->velocity.y;
+
+            // velocity
             arrow->velocity.y += 2;  // gravity
             if (ABS(arrow->velocity.x) > 2) {  // air resistance
                 arrow->velocity.x -= SIGN(arrow->velocity.x);
+            }
+
+            // rotation; turn to point downwards (i.e. angle towards 0) with vertical air resistance
+            if (arrow->velocity.y > 0) {
+                // Vertical air resistance scales with downward-velocity and horizontalness.
+                const int32_t velocity_scalar = 8 * (arrow->velocity.y * arrow->velocity.y);
+                // Sine gives us horizontalness and also the direction in which to turn.
+                const int32_t turn = (velocity_scalar * sin_lookup(arrow->angle)) / TRIG_MAX_RATIO;
+                // shift angle so that 0 is mid-range i.e. DEG_TO_TRIGANGLE(180) for easy comparison
+                const int32_t shifted_angle = normalize_angle(
+                    arrow->angle + arrow->offset_angle + DEG_TO_TRIGANGLE(180));
+                if (ABSDIFF(shifted_angle, DEG_TO_TRIGANGLE(180)) > ABS(turn)) {
+                    arrow->offset_angle -= turn;
+                } else {
+                    arrow->offset_angle = -arrow->angle;
+                    arrow->velocity.x = 0;
+                }
             }
 
             if (draw_arrow(layer, ctx, arrow, 0)) {
@@ -319,7 +358,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     int16_t delay = 0;
 
     if (units_changed & SECOND_UNIT) {
-        const int16_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
+        const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
         const int32_t length = 70;
         const int32_t distance = rand() % (center.x - (length / 2));
         arrow_shoot(&s_arrows[2], angle, length, distance, delay);
@@ -327,16 +366,16 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     }
 
     if (units_changed & MINUTE_UNIT) {
-        const int16_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
+        const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
         const int32_t length = 70;
         const int32_t distance = rand() % (center.x - (length / 2));
         arrow_shoot(&s_arrows[1], angle, length, distance, delay);
         delay++;
     }
 
-    if (units_changed & HOUR_UNIT) {
+    if (units_changed & HOUR_UNIT) {  // TODO update every 15 minutes?
+        const int32_t angle = s_state.hour * (TRIG_MAX_ANGLE / (HOURS_PER_DAY / 2));
         const int32_t length = 50;
-        const int16_t angle = s_state.hour * (TRIG_MAX_ANGLE / (HOURS_PER_DAY / 2));
         const int32_t distance = rand() % (center.x - (length / 2));
         arrow_shoot(&s_arrows[0], angle, length, distance, delay);
         delay++;
