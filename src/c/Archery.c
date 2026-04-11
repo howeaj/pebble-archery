@@ -137,7 +137,7 @@ typedef struct ArrowContext {
 
 #define MAX_ARROWS (30)
 #define ARROW_NUM_FRAMES (4)
-#define GRAVITY (1)
+#define GColorWood GColorWindsorTan
 
 static ArrowContext s_arrows[MAX_ARROWS];
 static ArrowContext s_arrows_falling[MAX_ARROWS];
@@ -171,7 +171,7 @@ static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t
     const GPoint tip = arrow_tip(layer, arrow);
     const GPoint tail = point_from_angle(tip, shaft_angle, arrow->length);
     graphics_context_set_stroke_width(ctx, 2);
-    graphics_context_set_stroke_color(ctx, GColorWindsorTan);
+    graphics_context_set_stroke_color(ctx, GColorWood);
     graphics_draw_line(ctx, tip, tail);
 
     // point
@@ -214,7 +214,7 @@ static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     const GPoint tail = point_from_angle(tip, arrow->angle, offscreen);
 
     graphics_context_set_stroke_width(ctx, 1);
-    graphics_context_set_stroke_color(ctx, GColorDarkGray);
+    graphics_context_set_stroke_color(ctx, GColorWood);
     graphics_draw_line(ctx, tip, tail);
 }
 
