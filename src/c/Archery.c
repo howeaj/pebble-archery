@@ -268,6 +268,33 @@ static void draw_target(Layer *layer, GContext *ctx) {
     //     graphics_draw_circle(ctx, center, (i + 1) * ring_width);
     //     LOG("radius %d", (i + 1) * ring_width);
     // }
+
+    // clock lines
+    GRect target_bounds = grect_crop(bounds, (bounds.size.w / 2) - TARGET_RADIUS);
+    // TODO wtf fix bounds calculation properly
+    if (target_bounds.size.w % 2) {
+        target_bounds.origin.x += 2;
+    }
+#if PBL_PLATFORM_EMERY
+    target_bounds.size.h += 2;
+    target_bounds.size.w += 2;
+#endif
+#if PBL_PLATFORM_GABBRO
+    target_bounds.origin.x += 2;
+    target_bounds.origin.y += 2;
+    target_bounds.size.w -= 1;
+    target_bounds.size.h -= 2;
+#endif // PBL_PLATFORM_GABBRO
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
+    #define NUM_CLOCK_LINES (12)
+    for (int32_t i = 0; i < NUM_CLOCK_LINES; i++) {
+        const int16_t angle = i * DEG_TO_TRIGANGLE(360 / NUM_CLOCK_LINES);
+        const GPoint circumference_point = gpoint_from_polar(target_bounds, GOvalScaleModeFitCircle, angle);
+        int32_t line_len = ((i % 3) == 0) ? 10 : 5;
+        const GPoint inner_point = point_from_angle(circumference_point, angle, -line_len);
+        graphics_draw_line(ctx, circumference_point, inner_point);
+    }
 }
 
 static Layer *s_layer_trophy;
