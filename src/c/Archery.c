@@ -452,7 +452,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     bool is_manual_reshoot = true;  // TODO
     int32_t clue_distance = max_distance;
     if (is_manual_reshoot) {
-        CompassHeadingData compass;
+        CompassHeadingData compass = {0};
         (void)compass_service_peek(&compass);
 
         // Condition #1: Align the arrow with compass North
@@ -661,6 +661,7 @@ static void main_window_unload(Window *window) {
 
     tick_timer_service_unsubscribe();
     accel_tap_service_unsubscribe();
+    compass_service_unsubscribe();  // compass_service_peek() automatically subscribes us
 }
 
 static void init(void) {
