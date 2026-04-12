@@ -13,7 +13,6 @@
         robin hood
     condition complete celebration effects
         arrow spam
-        vibes song
     hint every X shakes in a row
 
     hour markers around the edge
@@ -399,9 +398,29 @@ static void achievement_complete(Achievement achievement) {
     LOG("ACHIEVEMENT COMPLETE: %u", achievement);
     if (!achievement_in(s_achievements, achievement)) {
         LOG("NEW ACHIEVEMENT %d", achievement);
+
         achievement_notify(achievement);
         achievement_add(&s_achievements, achievement);
         achievements_save();
+
+        // vibes for victory TODO move this
+        static const uint32_t segments[] = {
+            // final fantasy victory theme; 100BPM, 1 quarter beat = 150ms
+            75, 75,
+            75, 75,
+            75, 75,
+            75*5, 75,  // 3
+            75*5, 75,  // 3
+            75*5, 75,  // 3
+            75, 75*3,  // 2
+            75, 75,
+            75*6       // 3
+        };
+        VibePattern pat = {
+            .durations = segments,
+            .num_segments = ARRAY_LENGTH(segments),
+        };
+        vibes_enqueue_custom_pattern(pat);
     }
 }
 
