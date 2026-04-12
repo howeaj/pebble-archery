@@ -9,6 +9,7 @@
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define ABS(a) (((a) >= 0) ? (a) : ((a) * -1))
 #define ABSDIFF(a, b) ((a) >= (b) ? (a) - (b) : (b) - (a))
+#define ABSDIFF_WRAP(a, b, max) MIN(ABS((a) - (b)), (max) + 1 - ABS((a) - (b)))
 #define SIGN(a) (((a) >= 0) ? 1 : -1)
 
 // Debugging

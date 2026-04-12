@@ -1,11 +1,22 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
-    levels
-        keep it still (and upright if gyro)
-        battery fully charged?
-        compass
+    conditions
+        keep it still and upright and point south
+        align compass with each arrow
+            (extra: when arrows aren't close together)
+        align "up" with each arrow
+            (extra: when arrows aren't close together)
+        pure luck (1/10,000)
+    vibe on non-random perfect hit
+    condition complete celebration effects
+        arrow spam
+        vibes song
+    track completed conditions
+    hint every X shakes in a row
 
+    hour markers around the edge
+    Shrink target on Gabbro for green border
     leave holes behind?
     special animation for robin hoods
     random animation for
@@ -13,7 +24,6 @@
         bouncer
         pass-through
     screen shake on hit?
-    vibe on hit
 
     shake too hard -> target falls off
     collision between shots and falling arrows (difficult)
@@ -21,6 +31,7 @@
     user config options (silly)
         carbon/aluminium/wooden arrows
         different faces
+        darts
 */
 
 #include <pebble.h>
@@ -233,6 +244,8 @@ static void arrow_frame_4(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     draw_arrow(layer, ctx, arrow, 0, false);
 }
 
+// Increment the arrow's shooting animation frame, schedule it for rendering,
+// and set a timer for the next one (until completion).
 static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
@@ -250,32 +263,93 @@ static void arrow_pull(ArrowContext* original_arrow) {
     s_arrows_falling_index = (s_arrows_falling_index + 1) % MAX_ARROWS;
     original_arrow->frame = 0;
 
-    LOG("PULL #%u", s_arrows_falling_index);
     // pull out in the direction of the arrow
     arrow->velocity = point_from_angle(GPointZero, arrow->angle, 10);
 }
 
 // Start a new arrow shoot sequence
-static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int32_t distance, int16_t delay) {
+static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int16_t delay) {
     ASSERT(delay >= 0);
 
     arrow_pull(arrow);
 
     arrow->angle = angle;
     arrow->length = length;
-    arrow->distance = distance;
     arrow->frame = 0 - delay;
     arrow->color = (GColor8){.argb=rand() % UINT8_MAX};  // TODO limit colours to nice bright ones or signify hour/min/sec
 
     arrow_nextframe(arrow);
 }
 
+// TODO accelerometer upright, +- 4000 which is +-4G. compass app uses y < -700 to switch to upright.
+
+// Set the distance from centre that `arrow` will hit.
+static void arrow_determine_accuracy(ArrowContext *arrow) {
+    const int32_t target_radius = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2); // TODO not necessarily; use frame
+    const int32_t scoreband_radius = target_radius / 10;  // note each target colour is two scorebands
+    const int32_t arrow_width = 3;
+
+    // TODO always keep hour arrow fully on-screen, or at least one arrow
+    int32_t max_distance = target_radius - (scoreband_radius);
+
+    // Normally, you get a fixed small chance to hit the centre.
+    // Chosen to get both arrows in centre on average weekly when shooting once per minute.
+    bool hit_centre = (rand() % 100) == 0;
+    if (hit_centre) {
+        LOG("PERFECT HIT: RANDOM");
+    }
+
+    // But if you do a manual reshoot, there are conditions to force a perfect hit.
+    // If you get close to a condition, they give a clue by reducing the max distance.
+    bool is_manual_reshoot = true;  // TODO
+    int32_t clue_distance = max_distance;
+    if (is_manual_reshoot) {
+        CompassHeadingData compass;
+        (void)compass_service_peek(&compass);
+
+        // Condition #1: Align the arrow with compass North
+        if (DEBUG || (compass.compass_status >= CompassStatusCalibrating)) {
+            const int32_t clockwise_heading = TRIG_MAX_ANGLE - compass.true_heading;
+            const int32_t compass_deviation = ABSDIFF_WRAP(arrow->angle, clockwise_heading, DEG_TO_TRIGANGLE(360));
+            const int32_t hit_threshold = TRIG_MAX_ANGLE / MINUTES_PER_HOUR; // within 1 minute either side
+            const int32_t clue_threshold = DEG_TO_TRIGANGLE(90);
+            LOG("clockwise_heading=%d, arrow->angle=%d, compass_deviation=%u",
+                TRIGANGLE_TO_DEG(clockwise_heading),
+                TRIGANGLE_TO_DEG(arrow->angle),
+                TRIGANGLE_TO_DEG(compass_deviation)
+            );
+            if (compass_deviation < hit_threshold) {
+                hit_centre = true;
+                LOG("PERFECT HIT: COMPASS");
+            } else if (compass_deviation < clue_threshold) {
+                clue_distance = MIN(clue_distance, (max_distance * compass_deviation) / clue_threshold);
+                LOG("CLUE: COMPASS");
+            }
+        } else {
+            LOG("Compass error %i", compass.compass_status);
+        }
+    }
+
+    // now we have evaluated the conditions, choose how close to the centre this arrow goes
+    int32_t min_distance;
+    if (hit_centre) {
+        min_distance = 0;
+        max_distance = scoreband_radius - arrow_width;
+    } else {
+        min_distance = scoreband_radius + arrow_width;
+        max_distance = clue_distance;
+    }
+    arrow->distance = min_distance + (rand() % (max_distance - min_distance));
+    LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
+}
+
 static void animate_shots(Layer* layer, GContext* ctx) {
     for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
         ArrowContext* const arrow = &s_arrows[i];
-        if (arrow->frame) {
+        if (arrow->frame > 0) {
             switch(arrow->frame) {
             case 1:
+                arrow_determine_accuracy(arrow);
                 arrow_frame_1(layer, ctx, arrow);
                 break;
             case 2:
@@ -301,7 +375,7 @@ static void continue_falling(void* context) {
 }
 
 static void animate_fall(Layer* layer, GContext* ctx) {
-    bool still_falling = false;
+    bool any_still_falling = false;
     for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
         ArrowContext* const arrow = &s_arrows_falling[i];
         if (arrow->frame) {
@@ -310,7 +384,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
             arrow->offset_pos.y += arrow->velocity.y;
 
             // velocity
-            arrow->velocity.y += 2;  // gravity
+            arrow->velocity.y += 2;  // gravity TODO change according to pebble's orientation
             if (ABS(arrow->velocity.x) > 2) {  // air resistance
                 arrow->velocity.x -= SIGN(arrow->velocity.x);
             }
@@ -322,6 +396,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
                 // Sine gives us horizontalness and also the direction in which to turn.
                 const int32_t turn = (velocity_scalar * sin_lookup(arrow->angle)) / TRIG_MAX_RATIO;
                 // shift angle so that 0 is mid-range i.e. DEG_TO_TRIGANGLE(180) for easy comparison
+                // TODO use ABSDIFF_WRAP?
                 const int32_t shifted_angle = normalize_angle(
                     arrow->angle + arrow->offset_angle + DEG_TO_TRIGANGLE(180));
                 if (ABSDIFF(shifted_angle, DEG_TO_TRIGANGLE(180)) > ABS(turn)) {
@@ -333,13 +408,13 @@ static void animate_fall(Layer* layer, GContext* ctx) {
             }
 
             if (draw_arrow(layer, ctx, arrow, 0, true)) {
-                still_falling = true;
+                any_still_falling = true;
             } else {
                 arrow->frame = 0;
             }
         }
     }
-    if (still_falling) {
+    if (any_still_falling) {
         app_timer_register(33, &continue_falling, NULL);  // 30fps
     }
 }
@@ -360,24 +435,19 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
 
-    const GRect bounds = layer_get_bounds(s_arrow_layer);
-    const GPoint center = grect_center_point(&bounds);
-
     int16_t delay = 1;
 
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
         const int32_t length = 70;
-        const int32_t distance = rand() % (center.x - (length / 2));
-        arrow_shoot(&s_arrows[2], angle, length, distance, delay);
+        arrow_shoot(&s_arrows[2], angle, length, delay);
         delay++;
     }
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
         const int32_t length = 70;
-        const int32_t distance = rand() % (center.x - (length / 2));
-        arrow_shoot(&s_arrows[1], angle, length, distance, delay);
+        arrow_shoot(&s_arrows[1], angle, length, delay);
         delay++;
 
         { // hours
@@ -386,8 +456,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
                 * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
             );
             const int32_t length = 50;
-            const int32_t distance = rand() % (center.x - (length / 2));
-            arrow_shoot(&s_arrows[0], angle, length, distance, delay);
+            arrow_shoot(&s_arrows[0], angle, length, delay);
             delay++;
         }
     }
@@ -422,8 +491,6 @@ static void main_window_load(Window *window) {
 
     tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
     accel_tap_service_subscribe(accel_tap_handler);
-    // compass_service_subscribe();
-    // battery_state_service_subscribe();
 
     reshoot_all_arrows();
 }
@@ -436,8 +503,6 @@ static void main_window_unload(Window *window) {
 
     tick_timer_service_unsubscribe();
     accel_tap_service_unsubscribe();
-    // battery_state_service_unsubscribe();
-    // compass_service_unsubscribe();
 }
 
 static void init(void) {
