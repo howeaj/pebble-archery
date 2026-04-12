@@ -52,7 +52,13 @@ typedef struct State {
 } State;
 State s_state;
 
-#define TARGET_RADIUS (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2)
+#if PBL_PLATFORM_GABBRO
+    #define GRASS_WIDTH (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 14)  // just enough to fit trophies
+    #define TARGET_RADIUS ((MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - GRASS_WIDTH)
+#else // !PBL_PLATFORM_GABBRO
+    #define TARGET_RADIUS (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2)
+#endif // !PBL_PLATFORM_GABBRO
+
 #define SCOREBAND_WIDTH (TARGET_RADIUS / 10)  // note each target colour is two scorebands
 
 
@@ -188,11 +194,16 @@ static void draw_target(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
 
-#if PBL_RECT
+#if !PBL_CHALK
     // grass with drop-shadow
     graphics_color_rect(ctx, bounds, 0, GCornerNone, GColorMayGreen);
-    graphics_color_circle(ctx, (GPoint){center.x - 5, center.y + 5}, TARGET_RADIUS + 5, GColorDarkGreen);
+
+    uint16_t shadow_radius = TARGET_RADIUS;
+#if PBL_RECT
+    shadow_radius += 5;  // bigger shadow looks better on rect
 #endif // PBL_RECT
+    graphics_color_circle(ctx, (GPoint){center.x - 5, center.y + 5}, shadow_radius, GColorDarkGreen);
+#endif // !PBL_CHALK
 
     // face
     const GColor colors[] = {
@@ -227,7 +238,9 @@ static void draw_trophies(Layer *layer, GContext *ctx){
         return;
     };
 
-#if PBL_ROUND
+#if PBL_PLATFORM_GABBRO
+    const GRect bounds = grect_crop(layer_get_bounds(layer), GRASS_WIDTH);
+#elif PBL_PLATFORM_CHALK
     const GRect bounds = grect_crop(layer_get_bounds(layer), SCOREBAND_WIDTH * 2);  // trophies inside white ring
 #elif PBL_PLATFORM_EMERY  // TODO maybe do this at the top level instead
     const GRect bounds = grect_crop(layer_get_bounds(layer), 5);
