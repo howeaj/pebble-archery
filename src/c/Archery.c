@@ -2,12 +2,13 @@
 
 /* TODO
     conditions
-        keep it still and upright and point south
+        pure luck (1/10,000)
         align compass with each arrow
             (extra: when arrows aren't close together)
+        keep it still and upright and point north
         align "up" with each arrow
             (extra: when arrows aren't close together)
-        pure luck (1/10,000)
+        robin hood
     vibe on non-random perfect hit
     condition complete celebration effects
         arrow spam
@@ -36,11 +37,13 @@
 
 #include <pebble.h>
 
-#define DEBUG 1
+#define DEBUG true
 #include "Macros.h"
 
 static Window *s_window;
 
+
+// todo delete this if there's no use
 typedef struct State {
     int hour;
     int min;
@@ -67,7 +70,7 @@ static inline void graphics_color_rect(GContext *ctx, GRect rect, uint16_t corne
 }
 
 /// Return a GPoint that is `distance` away from `origin` at `angle`.
-/// If `origin` is 0, this is equivalent to converting `angle` to a vector of magnitude `distance`.
+/// If `origin` is 0, this is equivalent to converting `angle` to a cartesian vector of magnitude `distance`.
 static GPoint point_from_angle(GPoint origin, int32_t angle, int32_t distance) {
     return (GPoint) {
         .x = (int16_t)((sin_lookup(angle) * distance) / TRIG_MAX_RATIO) + origin.x,
@@ -83,6 +86,93 @@ static int32_t normalize_angle(int32_t angle) {
     }
     return normalized_angle;
 }
+
+
+/******************************************************************************
+ Achievements
+******************************************************************************/
+
+typedef uint32_t Achievements; // Bitfield, each bit indexed by Achievement
+
+// Index of each achievement within Achievements.
+// The meaning of each index should never change, as this is stored persistently.
+typedef enum Achievement {
+  ACHIEVEMENT_PURE_LUCK = 0,
+  ACHIEVEMENT_COMPASS   = 1,
+
+  ACHIEVEMENT_MAX,  // end-of-enum indicator; the number of achievements
+} Achievement;
+
+Achievements s_achievements;  // The user's obtained achievements. Stored persistently.
+
+#define PERSIST_VERSION (0)  // The current persistent storage version
+
+// persistent storage keys
+#define PERSIST_KEY_VERSION (0)  // key for the version of the remaining storage layout
+#define PERSIST_KEY_ACHIEVEMENTS (1)  // key for s_achievements
+
+
+static bool is_persist_written_and_current_version(void) {
+    return persist_read_int(PERSIST_KEY_VERSION) == PERSIST_VERSION;
+}
+
+/// Return true if achievements were loaded
+static bool achievements_load(void) {
+    StatusCode status = E_DOES_NOT_EXIST;
+    if (is_persist_written_and_current_version()){
+        status = persist_read_data(PERSIST_KEY_ACHIEVEMENTS, &s_achievements, sizeof(s_achievements));
+        ASSERT(status == sizeof(s_achievements));
+    }
+    return status == sizeof(s_achievements);
+}
+
+static void achievements_save(void) {
+    StatusCode status = persist_write_data(PERSIST_KEY_ACHIEVEMENTS, &s_achievements, sizeof(s_achievements));
+    ASSERT(status == sizeof(s_achievements));
+
+    if (status == sizeof(s_achievements)) {
+        status = persist_write_int(PERSIST_KEY_VERSION, PERSIST_VERSION);
+        ASSERT(status == sizeof(int32_t));
+    }
+}
+
+// TODO reset option
+// static void achievements_delete(void){
+//     StatusCode status = persist_delete(PERSIST_KEY_ACHIEVEMENTS);
+//     ASSERT((status == S_TRUE) || (status == E_DOES_NOT_EXIST));
+
+//     status = persist_delete(PERSIST_KEY_VERSION);
+//     ASSERT((status == S_TRUE) || (status == E_DOES_NOT_EXIST));
+// }
+
+// Add a single `achievement` to the given `achievements`
+static inline void achievement_add(Achievements* achievements, Achievement achievement) {
+    *achievements |= (((uint32_t)1u) << achievement);
+}
+
+// Return true if `achievement` is in `achievements`
+static inline bool achievement_in(const Achievements* achievements, Achievement achievement) {
+    return (*achievements & (((uint32_t)1u) << achievement)) != 0;
+}
+
+// TODO Return the number of complete achievements
+// int16_t num_achievements(void) {
+//     int16_t count = 0;
+//     for (size_t i; i < sizeof(s_achievements) * 8; i++){
+//         if ((1 << i) & s_achievements) {
+//             ++ count;
+//         }
+//     }
+//     return count;
+// }
+
+// Record the completion of an achievement
+static void achievement_complete(Achievement achievement) {
+    LOG("ACHIEVEMENT COMPLETE: %u", achievement);
+    achievement_add(&s_achievements, (((uint32_t)1u) << achievement));
+    achievements_save();
+}
+
 
 /******************************************************************************
  Background graphics
@@ -144,6 +234,10 @@ typedef struct ArrowContext {
     GPoint offset_pos;  // offset from original hit location
     int32_t offset_angle;  // offset from original shaft angle
     GPoint velocity;
+
+    // for tracking achievement success
+    bool is_manual_shot;
+    Achievements achievements;  // achievements for which this arrow has met the conditions
 } ArrowContext;
 
 #define MAX_ARROWS (30)
@@ -153,6 +247,38 @@ typedef struct ArrowContext {
 static ArrowContext s_arrows[MAX_ARROWS];
 static ArrowContext s_arrows_falling[MAX_ARROWS];
 static size_t s_arrows_falling_index = 0;  // the next slot in which to place a falling arrow
+
+
+static void check_achievement_completion(void) {
+    const size_t num_relevant_arrows = 2;  // Only the hour and second hand, which are always in the first 2 slots.
+    int16_t success_count[ACHIEVEMENT_MAX] = {0};
+
+    // count per-arrow achievement conditions
+    for (size_t i = 0; i < num_relevant_arrows; i++) {
+        ArrowContext* const arrow = &s_arrows[i];
+        if (arrow->frame) {
+            for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
+                if (arrow->is_manual_shot || (ach == ACHIEVEMENT_PURE_LUCK)) {
+                    if (achievement_in(&arrow->achievements, ach)) {
+                        success_count[ach] += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // conditions must be attained on all relevant arrows to complete the achievement
+    for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
+        if (success_count[ach] == num_relevant_arrows) {
+            achievement_complete(ach);
+        } else if (success_count[ach] == (num_relevant_arrows - 1)) {
+            if (s_arrows[0].frame && s_arrows[1].frame) {  // TODO implement properly
+                LOG("SO CLOSE %u", ach);
+            }
+        }
+    }
+
+}
 
 // Return the tip location of the arrow relative to `layer`
 static GPoint arrow_tip(const Layer* layer, const ArrowContext* arrow) {
@@ -221,7 +347,7 @@ static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t
 // Draw the initial swooshy speed arrival line prior to hit
 static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     const GPoint tip = arrow_tip(layer, arrow);
-    const int32_t offscreen = 200;
+    const int32_t offscreen = 200;  // TODO calculate from root layer bounds
     const GPoint tail = point_from_angle(tip, arrow->angle, offscreen);
 
     graphics_context_set_stroke_width(ctx, 1);
@@ -251,6 +377,8 @@ static void arrow_nextframe(void* context) {
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
         app_timer_register((arrow->frame < 1) ? 300 : 50, &arrow_nextframe, arrow);
+    } else if (arrow->is_manual_shot) {
+        check_achievement_completion();
     }
     layer_mark_dirty(s_arrow_layer);
 }
@@ -268,15 +396,17 @@ static void arrow_pull(ArrowContext* original_arrow) {
 }
 
 // Start a new arrow shoot sequence
-static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int16_t delay) {
+static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int16_t delay, bool is_manual_shot) {
     ASSERT(delay >= 0);
 
     arrow_pull(arrow);
 
+    memset(arrow, 0, sizeof(*arrow));
     arrow->angle = angle;
     arrow->length = length;
     arrow->frame = 0 - delay;
     arrow->color = (GColor8){.argb=rand() % UINT8_MAX};  // TODO limit colours to nice bright ones or signify hour/min/sec
+    arrow->is_manual_shot = is_manual_shot;
 
     arrow_nextframe(arrow);
 }
@@ -297,6 +427,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     bool hit_centre = (rand() % 100) == 0;
     if (hit_centre) {
         LOG("PERFECT HIT: RANDOM");
+        achievement_add(&arrow->achievements, ACHIEVEMENT_PURE_LUCK);
     }
 
     // But if you do a manual reshoot, there are conditions to force a perfect hit.
@@ -321,6 +452,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
             if (compass_deviation < hit_threshold) {
                 hit_centre = true;
                 LOG("PERFECT HIT: COMPASS");
+                achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
             } else if (compass_deviation < clue_threshold) {
                 clue_distance = MIN(clue_distance, (max_distance * compass_deviation) / clue_threshold);
                 LOG("CLUE: COMPASS");
@@ -362,6 +494,7 @@ static void animate_shots(Layer* layer, GContext* ctx) {
                 arrow_frame_4(layer, ctx, arrow);
                 break;
             default:
+                LOG("WTF %d", arrow->frame);
                 ASSERT(false);
                 break;
             }
@@ -430,24 +563,27 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
  Handlers
 ******************************************************************************/
 
+#define MANUAL_SHOT_TIMEUNITS INT8_MAX
+
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     s_state.hour = tick_time->tm_hour % 12;
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
 
+    const bool is_manual_shot = (units_changed == MANUAL_SHOT_TIMEUNITS);
     int16_t delay = 1;
 
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
         const int32_t length = 70;
-        arrow_shoot(&s_arrows[2], angle, length, delay);
+        arrow_shoot(&s_arrows[2], angle, length, delay, is_manual_shot);
         delay++;
     }
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
         const int32_t length = 70;
-        arrow_shoot(&s_arrows[1], angle, length, delay);
+        arrow_shoot(&s_arrows[1], angle, length, delay, is_manual_shot);
         delay++;
 
         { // hours
@@ -456,7 +592,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
                 * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
             );
             const int32_t length = 50;
-            arrow_shoot(&s_arrows[0], angle, length, delay);
+            arrow_shoot(&s_arrows[0], angle, length, delay, is_manual_shot);
             delay++;
         }
     }
@@ -464,7 +600,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 
 static void reshoot_all_arrows(void) {
     const time_t now = time(NULL);
-    tick_handler(localtime(&now), HOUR_UNIT | MINUTE_UNIT);
+    tick_handler(localtime(&now), MANUAL_SHOT_TIMEUNITS);
 }
 
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
@@ -491,6 +627,8 @@ static void main_window_load(Window *window) {
 
     tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
     accel_tap_service_subscribe(accel_tap_handler);
+
+    achievements_load();
 
     reshoot_all_arrows();
 }
