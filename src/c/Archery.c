@@ -217,18 +217,27 @@ static void draw_target(Layer *layer, GContext *ctx) {
 
     // face
     const GColor colors[] = {
+#if PBL_COLOR
         GColorWhite,
         GColorBlack,
         GColorBlue,
         GColorRed,
         GColorYellow,
+#else // PBL_BW
+        GColorWhite,
+        GColorLightGray,
+        GColorWhite,
+        GColorLightGray,
+        GColorWhite,
+#endif // PBL_BW
     };
+
     const int16_t ring_width = TARGET_RADIUS / ARRAY_LENGTH(colors);
     for (size_t i = 0; i < ARRAY_LENGTH(colors); i++) {
         graphics_color_circle(ctx, center, (ARRAY_LENGTH(colors) - i) * ring_width, colors[i]);
     }
     // 10spot
-    graphics_color_circle(ctx, center, ring_width / 2, GColorPastelYellow);
+    graphics_color_circle(ctx, center, ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorBlack));
 
     // black divider between all rings, except white between the blacks
     // ... looks bad
@@ -332,7 +341,7 @@ typedef struct ArrowContext {
     Achievements achievements;  // achievements for which this arrow has met the conditions
 } ArrowContext;
 
-#define MAX_ARROWS (30)
+#define MAX_ARROWS (3)
 #define ARROW_NUM_FRAMES (4)
 #define GColorWood GColorWindsorTan
 
