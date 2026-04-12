@@ -38,6 +38,7 @@
 #include <pebble.h>
 
 #define DEBUG true
+#define SECOND_HAND false
 #include "Macros.h"
 
 static Window *s_window;
@@ -573,12 +574,14 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     const bool is_manual_shot = (units_changed == MANUAL_SHOT_TIMEUNITS);
     int16_t delay = 1;
 
+#if SECOND_HAND
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
         const int32_t length = 70;
         arrow_shoot(&s_arrows[2], angle, length, delay, is_manual_shot);
         delay++;
     }
+#endif // SECOND_HAND
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
@@ -625,7 +628,7 @@ static void main_window_load(Window *window) {
     layer_set_update_proc(s_arrow_layer, arrow_canvas);
     layer_add_child(window_layer, s_arrow_layer);
 
-    tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+    tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
     accel_tap_service_subscribe(accel_tap_handler);
 
     achievements_load();
