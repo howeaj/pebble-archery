@@ -381,7 +381,8 @@ static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
-        arrow->timer = app_timer_register((arrow->frame < 1) ? 300 : 50, &arrow_nextframe, arrow);
+        const uint32_t delay_between_arrows = arrow->is_manual_shot ? 800 : 300;  // extra time for achiev criteria
+        arrow->timer = app_timer_register((arrow->frame < 1) ? delay_between_arrows : 50, &arrow_nextframe, arrow);
         ASSERT(arrow->timer != NULL);
     } else {  // shot animation complete
         arrow->timer = NULL;
@@ -579,7 +580,7 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
  Handlers
 ******************************************************************************/
 
-#define MANUAL_SHOT_TIMEUNITS INT8_MAX
+#define MANUAL_SHOT_TIMEUNITS (INT8_MAX & ~SECOND_UNIT)
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     TRACE("tick_handler %d", units_changed);
@@ -617,14 +618,14 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     }
 }
 
-static void reshoot_all_arrows(void) {
+static void reshoot_all_arrows(bool is_manual_shot) {
     const time_t now = time(NULL);
-    tick_handler(localtime(&now), MANUAL_SHOT_TIMEUNITS);
+    tick_handler(localtime(&now), is_manual_shot ? MANUAL_SHOT_TIMEUNITS : (MINUTE_UNIT | HOUR_UNIT));
 }
 
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     TRACE("accel_tap_handler");
-    reshoot_all_arrows();
+    reshoot_all_arrows(true);
 }
 
 
@@ -649,7 +650,7 @@ static void main_window_load(Window *window) {
 
     achievements_load();
 
-    reshoot_all_arrows();
+    reshoot_all_arrows(false);
 }
 
 static void main_window_unload(Window *window) {
