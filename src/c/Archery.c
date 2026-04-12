@@ -225,7 +225,11 @@ static Layer *s_arrow_layer;
 
 // Context required to draw an arrow animation sequence
 typedef struct ArrowContext {
+    // update tracking
     int16_t frame;  // which frame of animation is it on. 0 for nothing.
+    AppTimer* timer;  // timer for next update
+
+    // static attributes of the original shot
     int32_t angle;  // in trigangle units
     int32_t length;  // of shaft
     int32_t distance;  // from centre
@@ -377,8 +381,10 @@ static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
-        app_timer_register((arrow->frame < 1) ? 300 : 50, &arrow_nextframe, arrow);
-    } else if (arrow->is_manual_shot) {
+        arrow->timer = app_timer_register((arrow->frame < 1) ? 300 : 50, &arrow_nextframe, arrow);
+        ASSERT(arrow->timer != NULL);
+    } else {  // shot animation complete
+        arrow->timer = NULL;
         check_achievement_completion();
     }
     layer_mark_dirty(s_arrow_layer);
@@ -386,6 +392,15 @@ static void arrow_nextframe(void* context) {
 
 // Start a new arrow removal sequence
 static void arrow_pull(ArrowContext* original_arrow) {
+    // Cancel any in-progress update timer.
+    // Note this also skips achievement checking.
+    // TODO is it possible for this event to be triggered in the same step as the timer
+    //      in which case the timer's handler would still run?
+    if (original_arrow->timer != NULL) {
+        app_timer_cancel(original_arrow->timer);
+        original_arrow->timer = NULL;
+    }
+
     // move the arrow from s_arrows to s_arrows_falling
     s_arrows_falling[s_arrows_falling_index] = *original_arrow;
     ArrowContext *arrow = &s_arrows_falling[s_arrows_falling_index];
@@ -567,6 +582,7 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
 #define MANUAL_SHOT_TIMEUNITS INT8_MAX
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
+    TRACE("tick_handler %d", units_changed);
     s_state.hour = tick_time->tm_hour % 12;
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
