@@ -43,7 +43,6 @@
 
 static Window *s_window;
 
-
 // todo delete this if there's no use
 typedef struct State {
     int hour;
@@ -65,6 +64,17 @@ State s_state;
 /******************************************************************************
  Generic functions
 ******************************************************************************/
+
+// Single vibe for duration
+#define VIBE(duration) MACRO_START \
+    LOG("VIBE %u", (duration)); \
+    static const uint32_t VIBE_segments[] = {(duration)}; \
+    VibePattern VIBE_pat = { \
+        .durations = VIBE_segments, \
+        .num_segments = ARRAY_LENGTH(VIBE_segments), \
+    }; \
+    vibes_enqueue_custom_pattern(VIBE_pat); \
+MACRO_END
 
 /// Fill a circle with color
 static inline void graphics_color_circle(GContext* ctx, GPoint p, uint16_t radius, GColor color){
@@ -294,6 +304,12 @@ static void draw_trophies(Layer *layer, GContext *ctx){
 
 static Layer *s_layer_arrow;
 
+typedef enum ShotReason {
+    SHOT_REASON_TICK = 0,
+    SHOT_REASON_INIT,
+    SHOT_REASON_MANUAL
+} ShotReason;
+
 // Context required to draw an arrow animation sequence
 typedef struct ArrowContext {
     // update tracking
@@ -301,6 +317,7 @@ typedef struct ArrowContext {
     AppTimer* timer;  // timer for next update
 
     // static attributes of the original shot
+    ShotReason shot_reason;
     int32_t angle;  // in trigangle units
     int32_t length;  // of shaft
     int32_t distance;  // from centre
@@ -312,7 +329,6 @@ typedef struct ArrowContext {
     GPoint velocity;
 
     // for tracking achievement success
-    bool is_manual_shot;
     Achievements achievements;  // achievements for which this arrow has met the conditions
 } ArrowContext;
 
@@ -334,7 +350,7 @@ static void check_achievement_completion(void) {
         ArrowContext* const arrow = &s_arrows[i];
         if (arrow->frame) {
             for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
-                if (arrow->is_manual_shot || (ach == ACHIEVEMENT_PURE_LUCK)) {
+                if ((arrow->shot_reason == SHOT_REASON_MANUAL) || (ach == ACHIEVEMENT_PURE_LUCK)) {
                     if (achievement_in(&arrow->achievements, ach)) {
                         success_count[ach] += 1;
                     }
@@ -431,14 +447,34 @@ static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     graphics_draw_line(ctx, tip, tail);
 }
 
-// Wobble anticlockwise
+// start effects that should occur on arrow hit
+static void arrow_hit_effects(ArrowContext* const arrow) {
+    // vibe
+    if (arrow->shot_reason != SHOT_REASON_TICK) {
+        if (arrow->achievements != 0) {
+            VIBE(500);
+        } else {
+            VIBE(100);
+        }
+    }
+}
+
+// Initial hit and wobble anticlockwise
 static void arrow_frame_2(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     draw_arrow(layer, ctx, arrow, -1, false);
+
+#if !DEBUG
+    arrow_hit_effects(arrow);
+#endif // !DEBUG
 }
 
 // Wobble clockwise
 static void arrow_frame_3(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     draw_arrow(layer, ctx, arrow, 1, false);
+
+#if DEBUG // emulator vibe is inaccurate, here looks better
+    arrow_hit_effects(arrow);
+#endif // DEBUG
 }
 
 // Final resting state
@@ -452,7 +488,7 @@ static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
-        const uint32_t delay_between_arrows = arrow->is_manual_shot ? 800 : 300;  // extra time for achiev criteria
+        const uint32_t delay_between_arrows = (arrow->shot_reason == SHOT_REASON_MANUAL) ? 800 : 300;
         arrow->timer = app_timer_register((arrow->frame < 1) ? delay_between_arrows : 50, &arrow_nextframe, arrow);
         ASSERT(arrow->timer != NULL);
     } else {  // shot animation complete
@@ -484,17 +520,17 @@ static void arrow_pull(ArrowContext* original_arrow) {
 }
 
 // Start a new arrow shoot sequence
-static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int16_t delay, bool is_manual_shot) {
+static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int16_t delay, ShotReason shot_reason) {
     ASSERT(delay >= 0);
 
     arrow_pull(arrow);
 
     memset(arrow, 0, sizeof(*arrow));
+    arrow->shot_reason = shot_reason;
     arrow->angle = angle;
     arrow->length = length;
     arrow->frame = 0 - delay;
     arrow->color = (GColor8){.argb=rand() % UINT8_MAX};  // TODO limit colours to nice bright ones or signify hour/min/sec
-    arrow->is_manual_shot = is_manual_shot;
 
     arrow_nextframe(arrow);
 }
@@ -510,7 +546,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
 
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
-    bool hit_centre = (rand() % 100) == 0;
+    bool hit_centre = (rand() % 3) == 0;
     if (hit_centre) {
         LOG("PERFECT HIT: RANDOM");
         achievement_add(&arrow->achievements, ACHIEVEMENT_PURE_LUCK);
@@ -518,9 +554,8 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
 
     // But if you do a manual reshoot, there are conditions to force a perfect hit.
     // If you get close to a condition, they give a clue by reducing the max distance.
-    bool is_manual_reshoot = true;  // TODO
     int32_t clue_distance = max_distance;
-    if (is_manual_reshoot) {
+    if (arrow->shot_reason == SHOT_REASON_MANUAL) {
         CompassHeadingData compass = {0};
         (void)compass_service_peek(&compass);
 
@@ -649,22 +684,18 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
  Handlers
 ******************************************************************************/
 
-#define MANUAL_SHOT_TIMEUNITS (INT8_MAX & ~SECOND_UNIT)
-
-static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-    TRACE("tick_handler %d", units_changed);
+static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, ShotReason shot_reason) {
     s_state.hour = tick_time->tm_hour % 12;
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
 
-    const bool is_manual_shot = (units_changed == MANUAL_SHOT_TIMEUNITS);
     int16_t delay = 1;
 
 #if SECOND_HAND
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
         const int32_t length = 70;
-        arrow_shoot(&s_arrows[2], angle, length, delay, is_manual_shot);
+        arrow_shoot(&s_arrows[2], angle, length, delay, shot_reason);
         delay++;
     }
 #endif // SECOND_HAND
@@ -672,7 +703,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
         const int32_t length = 70;
-        arrow_shoot(&s_arrows[1], angle, length, delay, is_manual_shot);
+        arrow_shoot(&s_arrows[1], angle, length, delay, shot_reason);
         delay++;
 
         { // hours
@@ -681,20 +712,26 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
                 * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
             );
             const int32_t length = 50;
-            arrow_shoot(&s_arrows[0], angle, length, delay, is_manual_shot);
+            arrow_shoot(&s_arrows[0], angle, length, delay, shot_reason);
             delay++;
         }
     }
 }
 
-static void reshoot_all_arrows(bool is_manual_shot) {
+static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
+    TRACE("tick_handler %d", units_changed);
+    shoot_all_arrows(tick_time, units_changed, SHOT_REASON_TICK);
+}
+
+static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
+    // note we don't ever bother reshooting the second hand, since it does it by itself
     const time_t now = time(NULL);
-    tick_handler(localtime(&now), is_manual_shot ? MANUAL_SHOT_TIMEUNITS : (MINUTE_UNIT | HOUR_UNIT));
+    shoot_all_arrows(localtime(&now), MINUTE_UNIT | HOUR_UNIT, shot_reason);
 }
 
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     TRACE("accel_tap_handler");
-    reshoot_all_arrows(true);
+    reshoot_all_arrows(SHOT_REASON_MANUAL);
 }
 
 
@@ -704,6 +741,7 @@ static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
 
 static void main_window_load(Window *window) {
     TRACE("main_window_load");
+
     Layer * const window_layer = window_get_root_layer(window);
 
     s_layer_target = layer_create(layer_get_frame(window_layer));
@@ -723,8 +761,7 @@ static void main_window_load(Window *window) {
     accel_tap_service_subscribe(accel_tap_handler);
 
     achievements_load();
-
-    reshoot_all_arrows(false);
+    reshoot_all_arrows(SHOT_REASON_INIT);
 }
 
 static void main_window_unload(Window *window) {
