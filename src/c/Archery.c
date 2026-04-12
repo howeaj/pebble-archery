@@ -36,6 +36,7 @@
 
 #include <pebble.h>
 
+#define DEMO true
 #define DEBUG true
 #define SECOND_HAND false
 #include "Macros.h"
@@ -683,6 +684,10 @@ static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int1
     ASSERT(delay >= 0);
     LOG("Shooting arrow %d", arrow - s_arrows);
 
+#if PBL_DISPLAY_WIDTH < 200  // TODO calculate based on screen width in the first place
+    length -= 10;
+#endif // PBL_DISPLAY_WIDTH
+
     arrow_pull(arrow);
 
     memset(arrow, 0, sizeof(*arrow));
@@ -709,7 +714,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
 
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
-    bool hit_centre = (rand() % 3) == 0;  // TODO reset to 100
+    bool hit_centre = (rand() % 100) == 0;
     if (hit_centre) {
         LOG("PERFECT HIT: RANDOM");
         achievement_add(&arrow->achievements, ACHIEVEMENT_PURE_LUCK);
@@ -757,6 +762,37 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     }
     arrow->distance = min_distance + (rand() % (max_distance - min_distance));
     LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
+
+#if DEMO
+    static int counter = 2;
+    if (counter > 0) {
+        if (arrow - s_arrows == 0) {
+            arrow->distance = 29;//17; // gabbro 29;
+            arrow->color = GColorCyan;
+        } else {
+            arrow->distance = 30;//50;// gabbro 55;
+            arrow->color = GColorMagenta;
+        }
+    } else if (counter > -2) {
+        if (arrow - s_arrows == 0) {
+            arrow->distance = 14; // gabbro 29;
+            arrow->color = GColorRed;
+        } else {
+            arrow->distance = 60;// gabbro 55;
+            arrow->color = GColorGreen;
+        }
+    } else {
+        if (arrow - s_arrows == 0) {
+            arrow->distance = 2; // gabbro 29;
+            arrow->color = GColorGreen;
+        } else {
+            arrow->distance = 6;// gabbro 55;
+            arrow->color = GColorYellow;
+        }
+        achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
+    }
+    counter--;
+#endif // DEMO
 }
 
 static void animate_shots(Layer* layer, GContext* ctx) {
@@ -885,9 +921,11 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     TRACE("tick_handler %d", units_changed);
+#if !DEMO
     if (!s_notify_showing) {
         shoot_all_arrows(tick_time, units_changed, SHOT_REASON_TICK);
     }
+#endif // !DEMO
 }
 
 static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
@@ -935,7 +973,10 @@ static void main_window_load(Window *window) {
 
     achievements_load();
     (void)achievement_dismiss();
+
+#if !DEMO
     reshoot_all_arrows(SHOT_REASON_INIT);
+#endif // !DEMO
 
     s_initialising = false;
 }
