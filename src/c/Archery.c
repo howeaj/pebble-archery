@@ -42,6 +42,7 @@
 #include "Macros.h"
 
 static Window *s_window;
+static bool s_initialising = true;
 
 // todo delete this if there's no use
 typedef struct State {
@@ -171,8 +172,8 @@ static inline void achievement_add(Achievements* achievements, Achievement achie
 }
 
 // Return true if `achievement` is in `achievements`
-static inline bool achievement_in(const Achievements* achievements, Achievement achievement) {
-    return (*achievements & (((uint32_t)1u) << achievement)) != 0;
+static inline bool achievement_in(Achievements achievements, Achievement achievement) {
+    return (achievements & (((uint32_t)1u) << achievement)) != 0;
 }
 
 // Return the number of complete achievements
@@ -186,11 +187,33 @@ static int16_t num_achievements(void) {
     return count;
 }
 
-// Record the completion of an achievement
-static void achievement_complete(Achievement achievement) {
-    LOG("ACHIEVEMENT COMPLETE: %u", achievement);
-    achievement_add(&s_achievements, (((uint32_t)1u) << achievement));
-    achievements_save();
+/// Animate `layer` to `appear` or disappear by scrolling pixels vertically `from_below` or above.
+/// `was_visible` a pointer to a static bool; will be updated
+static void animate_scroll(Layer *layer, bool appear, bool from_below, bool* was_visible) {
+    const int16_t hide_offset = (from_below ? 1 : -1) * layer_get_bounds(layer).size.h;
+    GPoint hidden_point = GPoint(0, hide_offset);
+    GPoint zero = GPoint(0, 0);
+    GPoint *from = NULL;
+    GPoint *to = NULL;
+    if (appear) {
+        from = &hidden_point;
+        to = &zero;
+    } else {
+        // from wherever it currently is
+        to = &hidden_point;
+    }
+
+    if (s_initialising) {  // start in the correct location
+        GRect bounds = layer_get_bounds(layer);
+        bounds.origin = *to;
+        layer_set_bounds(layer, bounds);
+    } else if (appear != *was_visible) {
+        Animation *animation = (Animation *)property_animation_create_bounds_origin(layer, from, to);
+        // animation_set_curve(animation, AnimationCurveLinear);
+        // animation_set_duration(animation, 100);
+        animation_schedule(animation);
+    }
+    *was_visible = appear;
 }
 
 
@@ -308,6 +331,82 @@ static void draw_trophies(Layer *layer, GContext *ctx){
 
 
 /******************************************************************************
+ Achievement notification
+******************************************************************************/
+
+static TextLayer *s_layer_notify;
+
+// init s_layer_notify
+static void notify_create(Layer * parent) {
+#if PBL_DISPLAY_WIDTH >= 240
+    const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+    const int16_t small_text_h = 24;
+#elif PBL_DISPLAY_WIDTH >= 160
+    #if PBL_ROUND
+        const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+        const int16_t small_text_h = 14;
+    #else // PBL_RECT
+        const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+        const int16_t small_text_h = 18;
+    #endif // PBL_RECT
+#else // PBL_DISPLAY_WIDTH < 160
+    const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+    const int16_t small_text_h = 14;
+#endif // PBL_DISPLAY_WIDTH < 160
+
+    GRect parent_bounds = layer_get_bounds(parent);
+
+    s_layer_notify = text_layer_create(GRect(0, 30, parent_bounds.size.w, (small_text_h * 5) / 2));
+    text_layer_set_text(s_layer_notify, "");
+    text_layer_set_text_alignment(s_layer_notify, GTextAlignmentCenter);
+    text_layer_set_font(s_layer_notify, small_text_font);
+    text_layer_set_background_color(s_layer_notify, GColorImperialPurple);
+    text_layer_set_text_color(s_layer_notify, GColorWhite);
+}
+
+static bool s_notify_showing = false;
+
+// returns true if a notification was dismissed
+static bool achievement_notify(Achievement achievement) {
+    bool dismissed = false;
+
+    switch (achievement) {
+    case ACHIEVEMENT_PURE_LUCK:
+        text_layer_set_text(s_layer_notify, "Trophy won: LUCKY DAY\ntime to buy a lottery ticket!");
+        break;
+    case ACHIEVEMENT_COMPASS:
+        text_layer_set_text(s_layer_notify, "Trophy won: NORTH STAR\nmagnetic arrows are cheating!");
+        break;
+    case ACHIEVEMENT_MAX:
+        if (s_notify_showing) {
+            dismissed = true;
+        }
+        break;
+    default:
+        ASSERT(false);
+        break;
+    }
+    animate_scroll((Layer*)s_layer_notify, achievement != ACHIEVEMENT_MAX, false, &s_notify_showing);
+
+    return dismissed;
+}
+
+static inline bool achievement_dismiss(void) {
+    return achievement_notify(ACHIEVEMENT_MAX);
+}
+
+static void achievement_complete(Achievement achievement) {
+    LOG("ACHIEVEMENT COMPLETE: %u", achievement);
+    if (!achievement_in(s_achievements, achievement)) {
+        LOG("NEW ACHIEVEMENT %d", achievement);
+        achievement_notify(achievement);
+        achievement_add(&s_achievements, achievement);
+        achievements_save();
+    }
+}
+
+
+/******************************************************************************
  Arrow graphics
 ******************************************************************************/
 
@@ -361,7 +460,7 @@ static void check_achievement_completion(void) {
         if (arrow->frame) {
             for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
                 if ((arrow->shot_reason == SHOT_REASON_MANUAL) || (ach == ACHIEVEMENT_PURE_LUCK)) {
-                    if (achievement_in(&arrow->achievements, ach)) {
+                    if (achievement_in(arrow->achievements, ach)) {
                         success_count[ach] += 1;
                     }
                 }
@@ -560,7 +659,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
 
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
-    bool hit_centre = (rand() % 3) == 0;
+    bool hit_centre = (rand() % 3) == 0;  // TODO reset to 100
     if (hit_centre) {
         LOG("PERFECT HIT: RANDOM");
         achievement_add(&arrow->achievements, ACHIEVEMENT_PURE_LUCK);
@@ -736,7 +835,9 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     TRACE("tick_handler %d", units_changed);
-    shoot_all_arrows(tick_time, units_changed, SHOT_REASON_TICK);
+    if (!s_notify_showing) {
+        shoot_all_arrows(tick_time, units_changed, SHOT_REASON_TICK);
+    }
 }
 
 static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
@@ -747,7 +848,9 @@ static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
 
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     TRACE("accel_tap_handler");
-    reshoot_all_arrows(SHOT_REASON_MANUAL);
+    if (!achievement_dismiss()) {
+        reshoot_all_arrows(SHOT_REASON_MANUAL);
+    }
 }
 
 
@@ -773,11 +876,18 @@ static void main_window_load(Window *window) {
     layer_set_update_proc(s_layer_arrow, arrow_canvas);
     layer_add_child(window_layer, s_layer_arrow);
 
+    // s_layer_notify
+    notify_create(window_layer);
+    layer_add_child(window_layer, (Layer*)s_layer_notify);
+
     tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
     accel_tap_service_subscribe(accel_tap_handler);
 
     achievements_load();
+    (void)achievement_dismiss();
     reshoot_all_arrows(SHOT_REASON_INIT);
+
+    s_initialising = false;
 }
 
 static void main_window_unload(Window *window) {
@@ -788,6 +898,7 @@ static void main_window_unload(Window *window) {
 
     layer_destroy(s_layer_target);
     layer_destroy(s_layer_arrow);
+    text_layer_destroy(s_layer_notify);
 
     tick_timer_service_unsubscribe();
     accel_tap_service_unsubscribe();
