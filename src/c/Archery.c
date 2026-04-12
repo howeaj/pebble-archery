@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
+    save last arrow conditions to pull at next init
+
     conditions
         pure luck (1/10,000)
         align compass with each arrow
@@ -9,11 +11,9 @@
         align "up" with each arrow
             (extra: when arrows aren't close together)
         robin hood
-    vibe on non-random perfect hit
     condition complete celebration effects
         arrow spam
         vibes song
-    track completed conditions
     hint every X shakes in a row
 
     hour markers around the edge
@@ -423,6 +423,7 @@ typedef struct ArrowContext {
     // update tracking
     int16_t frame;  // which frame of animation is it on. 0 for nothing.
     AppTimer* timer;  // timer for next update
+    bool hit_effects_started;
 
     // static attributes of the original shot
     ShotReason shot_reason;
@@ -557,13 +558,16 @@ static void arrow_frame_1(Layer *layer, GContext *ctx, ArrowContext* arrow) {
 }
 
 // start effects that should occur on arrow hit
-static void arrow_hit_effects(ArrowContext* const arrow) {
-    // vibe
-    if (arrow->shot_reason != SHOT_REASON_TICK) {
-        if (arrow->achievements != 0) {
-            VIBE(500);
-        } else {
-            VIBE(100);
+static void arrow_hit_effects(ArrowContext* arrow) {
+    if (!arrow->hit_effects_started) {
+        arrow->hit_effects_started = true;
+        // vibe
+        if (arrow->shot_reason != SHOT_REASON_TICK) {
+            if (arrow->achievements != 0) {
+                VIBE(500);
+            } else {
+                VIBE(100);
+            }
         }
     }
 }
