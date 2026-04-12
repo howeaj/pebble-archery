@@ -125,7 +125,7 @@ typedef enum Achievement {
 
 Achievements s_achievements;  // The user's obtained achievements. Stored persistently.
 
-#define PERSIST_VERSION (0)  // The current persistent storage version
+#define PERSIST_VERSION (1)  // The current persistent storage version
 
 // persistent storage keys
 #define PERSIST_KEY_VERSION (0)  // key for the version of the remaining storage layout
