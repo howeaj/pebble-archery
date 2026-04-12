@@ -344,6 +344,7 @@ typedef struct ArrowContext {
 #define MAX_ARROWS (3)
 #define ARROW_NUM_FRAMES (4)
 #define GColorWood GColorWindsorTan
+#define ARROW_DISTANCE_UNINITIALISED (-1)
 
 static ArrowContext s_arrows[MAX_ARROWS];
 static ArrowContext s_arrows_falling[MAX_ARROWS];
@@ -531,11 +532,13 @@ static void arrow_pull(ArrowContext* original_arrow) {
 // Start a new arrow shoot sequence
 static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int16_t delay, ShotReason shot_reason) {
     ASSERT(delay >= 0);
+    LOG("Shooting arrow %d", arrow - s_arrows);
 
     arrow_pull(arrow);
 
     memset(arrow, 0, sizeof(*arrow));
     arrow->shot_reason = shot_reason;
+    arrow->distance = ARROW_DISTANCE_UNINITIALISED;
     arrow->angle = angle;
     arrow->length = length;
     arrow->frame = 0 - delay;
@@ -548,6 +551,8 @@ static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int1
 
 // Set the distance from centre that `arrow` will hit.
 static void arrow_determine_accuracy(ArrowContext *arrow) {
+    ASSERT(arrow->distance == ARROW_DISTANCE_UNINITIALISED);
+
     const int32_t arrow_width = 3;
 
     // TODO always keep hour arrow fully on-screen, or at least one arrow
@@ -611,7 +616,9 @@ static void animate_shots(Layer* layer, GContext* ctx) {
         if (arrow->frame > 0) {
             switch(arrow->frame) {
             case 1:
-                arrow_determine_accuracy(arrow);
+                if (arrow->distance == ARROW_DISTANCE_UNINITIALISED) {
+                    arrow_determine_accuracy(arrow);
+                };
                 arrow_frame_1(layer, ctx, arrow);
                 break;
             case 2:
