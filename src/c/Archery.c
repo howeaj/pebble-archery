@@ -52,6 +52,9 @@ typedef struct State {
 } State;
 State s_state;
 
+#define TARGET_RADIUS (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2)
+#define SCOREBAND_WIDTH (TARGET_RADIUS / 10)  // note each target colour is two scorebands
+
 
 /******************************************************************************
  Generic functions
@@ -156,16 +159,16 @@ static inline bool achievement_in(const Achievements* achievements, Achievement 
     return (*achievements & (((uint32_t)1u) << achievement)) != 0;
 }
 
-// TODO Return the number of complete achievements
-// int16_t num_achievements(void) {
-//     int16_t count = 0;
-//     for (size_t i; i < sizeof(s_achievements) * 8; i++){
-//         if ((1 << i) & s_achievements) {
-//             ++ count;
-//         }
-//     }
-//     return count;
-// }
+// Return the number of complete achievements
+static int16_t num_achievements(void) {
+    int16_t count = 0;
+    for (size_t i = 0; i < sizeof(s_achievements) * 8; i++){
+        if ((1 << i) & s_achievements) {
+            ++ count;
+        }
+    }
+    return count;
+}
 
 // Record the completion of an achievement
 static void achievement_complete(Achievement achievement) {
@@ -179,17 +182,16 @@ static void achievement_complete(Achievement achievement) {
  Background graphics
 ******************************************************************************/
 
-static Layer *s_target_layer;
+static Layer *s_layer_target;
 
 static void draw_target(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
-    const int16_t target_radius = MIN(bounds.size.h, bounds.size.w) / 2;
 
 #if PBL_RECT
     // grass with drop-shadow
     graphics_color_rect(ctx, bounds, 0, GCornerNone, GColorMayGreen);
-    graphics_color_circle(ctx, (GPoint){center.x - 5, center.y + 5}, target_radius + 5, GColorDarkGreen);
+    graphics_color_circle(ctx, (GPoint){center.x - 5, center.y + 5}, TARGET_RADIUS + 5, GColorDarkGreen);
 #endif // PBL_RECT
 
     // face
@@ -200,7 +202,7 @@ static void draw_target(Layer *layer, GContext *ctx) {
         GColorRed,
         GColorYellow,
     };
-    const int16_t ring_width = target_radius / ARRAY_LENGTH(colors);
+    const int16_t ring_width = TARGET_RADIUS / ARRAY_LENGTH(colors);
     for (size_t i = 0; i < ARRAY_LENGTH(colors); i++) {
         graphics_color_circle(ctx, center, (ARRAY_LENGTH(colors) - i) * ring_width, colors[i]);
     }
@@ -216,12 +218,68 @@ static void draw_target(Layer *layer, GContext *ctx) {
     // }
 }
 
+static Layer *s_layer_trophy;
+static GBitmap* s_icon_trophy;
+
+static void draw_trophies(Layer *layer, GContext *ctx){
+    const int16_t num_trophies = num_achievements();
+    if (num_trophies == 0){
+        return;
+    };
+
+#if PBL_ROUND
+    const GRect bounds = grect_crop(layer_get_bounds(layer), SCOREBAND_WIDTH * 2);  // trophies inside white ring
+#elif PBL_PLATFORM_EMERY  // TODO maybe do this at the top level instead
+    const GRect bounds = grect_crop(layer_get_bounds(layer), 5);
+#else // PBL_RECT && !PBL_PLATFORM_EMERY
+    const GRect bounds = layer_get_bounds(layer);
+#endif // PBL_RECT && !PBL_PLATFORM_EMERY
+
+    graphics_context_set_compositing_mode(ctx, GCompOpSet); // enable transparency
+    const GSize icon_size = gbitmap_get_bounds(s_icon_trophy).size;
+
+#if PBL_RECT
+    const int16_t margin = 1;  // between each trophy
+    GRect icon_bounds = {
+        .origin = {
+            // to centre: .x = bounds.origin.x + (bounds.size.w / 2) - ((num_trophies * icon_size.w) / 2) - (margin * (num_trophies - 1)),
+            .x = bounds.origin.x,
+            .y = bounds.origin.y },
+        .size = icon_size
+    };
+    for (int16_t i = 0; i < num_trophies; i++) {
+        graphics_draw_bitmap_in_rect(ctx, s_icon_trophy, icon_bounds);
+        icon_bounds.origin.x += icon_size.w + margin;
+    }
+#else // PBL_ROUND
+
+#if PBL_PLATFORM_CHALK
+    const int16_t angle_per_icon = DEG_TO_TRIGANGLE(15);
+#else // !PBL_PLATFORM_CHALK
+    const int16_t angle_per_icon = DEG_TO_TRIGANGLE(10);
+#endif // !PBL_PLATFORM_CHALK
+
+    int16_t angle = DEG_TO_TRIGANGLE(0) - (((num_trophies - 1) * angle_per_icon) / 2);
+    for (int16_t i = 0; i < num_trophies; i++) {
+        const GPoint circumference_point = gpoint_from_polar(bounds, GOvalScaleModeFitCircle, angle);
+        const GRect icon_bounds = {
+            .origin = {
+                .x = circumference_point.x - (icon_size.w / 2),  // TODO + sine width/2 to support more trophies
+                .y = circumference_point.y - (icon_size.h + 1)},
+            .size = icon_size
+        };
+        graphics_draw_bitmap_in_rect(ctx, s_icon_trophy, icon_bounds);
+        angle += angle_per_icon;
+    }
+#endif // PBL_ROUND
+}
+
 
 /******************************************************************************
  Arrow graphics
 ******************************************************************************/
 
-static Layer *s_arrow_layer;
+static Layer *s_layer_arrow;
 
 // Context required to draw an arrow animation sequence
 typedef struct ArrowContext {
@@ -388,7 +446,7 @@ static void arrow_nextframe(void* context) {
         arrow->timer = NULL;
         check_achievement_completion();
     }
-    layer_mark_dirty(s_arrow_layer);
+    layer_mark_dirty(s_layer_arrow);
 }
 
 // Start a new arrow removal sequence
@@ -432,12 +490,10 @@ static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int1
 
 // Set the distance from centre that `arrow` will hit.
 static void arrow_determine_accuracy(ArrowContext *arrow) {
-    const int32_t target_radius = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2); // TODO not necessarily; use frame
-    const int32_t scoreband_radius = target_radius / 10;  // note each target colour is two scorebands
     const int32_t arrow_width = 3;
 
     // TODO always keep hour arrow fully on-screen, or at least one arrow
-    int32_t max_distance = target_radius - (scoreband_radius);
+    int32_t max_distance = TARGET_RADIUS - SCOREBAND_WIDTH;
 
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
@@ -483,9 +539,9 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     int32_t min_distance;
     if (hit_centre) {
         min_distance = 0;
-        max_distance = scoreband_radius - arrow_width;
+        max_distance = SCOREBAND_WIDTH - arrow_width;
     } else {
-        min_distance = scoreband_radius + arrow_width;
+        min_distance = SCOREBAND_WIDTH + arrow_width;
         max_distance = clue_distance;
     }
     arrow->distance = min_distance + (rand() % (max_distance - min_distance));
@@ -521,7 +577,7 @@ static void animate_shots(Layer* layer, GContext* ctx) {
 
 // Callback for timer to schedule the next falling animation update
 static void continue_falling(void* context) {
-    layer_mark_dirty(s_arrow_layer);
+    layer_mark_dirty(s_layer_arrow);
 }
 
 static void animate_fall(Layer* layer, GContext* ctx) {
@@ -569,7 +625,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
     }
 }
 
-// Callback to render s_arrow_layer
+// Callback to render s_layer_arrow
 static void arrow_canvas(Layer* layer, GContext* ctx) {
     animate_shots(layer, ctx);
     animate_fall(layer, ctx);
@@ -637,13 +693,18 @@ static void main_window_load(Window *window) {
     TRACE("main_window_load");
     Layer * const window_layer = window_get_root_layer(window);
 
-    s_target_layer = layer_create(layer_get_frame(window_layer));
-    layer_set_update_proc(s_target_layer, draw_target);
-    layer_add_child(window_layer, s_target_layer);
+    s_layer_target = layer_create(layer_get_frame(window_layer));
+    layer_set_update_proc(s_layer_target, draw_target);
+    layer_add_child(window_layer, s_layer_target);
 
-    s_arrow_layer = layer_create(layer_get_frame(window_layer));
-    layer_set_update_proc(s_arrow_layer, arrow_canvas);
-    layer_add_child(window_layer, s_arrow_layer);
+    s_icon_trophy = gbitmap_create_with_resource(RESOURCE_ID_ICON_TROPHY);
+    s_layer_trophy = layer_create(layer_get_frame(window_layer));
+    layer_set_update_proc(s_layer_trophy, draw_trophies);
+    layer_add_child(window_layer, s_layer_trophy);
+
+    s_layer_arrow = layer_create(layer_get_frame(window_layer));
+    layer_set_update_proc(s_layer_arrow, arrow_canvas);
+    layer_add_child(window_layer, s_layer_arrow);
 
     tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
     accel_tap_service_subscribe(accel_tap_handler);
@@ -656,8 +717,11 @@ static void main_window_load(Window *window) {
 static void main_window_unload(Window *window) {
     TRACE("main_window_unload");
 
-    layer_destroy(s_target_layer);
-    layer_destroy(s_arrow_layer);
+    gbitmap_destroy(s_icon_trophy);
+    layer_destroy(s_layer_trophy);
+
+    layer_destroy(s_layer_target);
+    layer_destroy(s_layer_arrow);
 
     tick_timer_service_unsubscribe();
     accel_tap_service_unsubscribe();

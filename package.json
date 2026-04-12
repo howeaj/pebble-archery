@@ -22,7 +22,19 @@
       "dummy"
     ],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "menuIcon": true,
+          "type": "bitmap",
+          "name": "APP_ICON",
+          "file": "app_icon.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "ICON_TROPHY",
+          "file": "trophy.png"
+        }
+      ]
     }
   }
 }
