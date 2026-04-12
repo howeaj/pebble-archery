@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
+    B&W appstore resources
+    dont let hour go offscreen
     save last arrow conditions to pull at next init
 
     conditions
@@ -15,8 +17,6 @@
         arrow spam
     hint every X shakes in a row
 
-    hour markers around the edge
-    Shrink target on Gabbro for green border
     leave holes behind?
     special animation for robin hoods
     random animation for
@@ -36,8 +36,8 @@
 
 #include <pebble.h>
 
-#define DEMO true
-#define DEBUG true
+#define DEMO false
+#define DEBUG false
 #define SECOND_HAND false
 #include "Macros.h"
 
