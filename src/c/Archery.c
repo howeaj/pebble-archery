@@ -52,14 +52,22 @@ typedef struct State {
 } State;
 State s_state;
 
+// The target actually gets drawn as several rings of equal width, so we must divide
+// and then multiply TARGET_RADIUS by TARGET_NUM_RINGS to account for that rounding error in advance.
+#define TARGET_NUM_RINGS (5)
+
 #if PBL_PLATFORM_GABBRO
     #define GRASS_WIDTH (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 14)  // just enough to fit trophies
-    #define TARGET_RADIUS ((MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - GRASS_WIDTH)
+    #define TARGET_RADIUS ((((MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - GRASS_WIDTH) \
+                            / TARGET_NUM_RINGS) * TARGET_NUM_RINGS)
 #else // !PBL_PLATFORM_GABBRO
-    #define TARGET_RADIUS (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2)
+    #define TARGET_RADIUS (((MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) \
+                            / TARGET_NUM_RINGS) * TARGET_NUM_RINGS)
 #endif // !PBL_PLATFORM_GABBRO
 
-#define SCOREBAND_WIDTH (TARGET_RADIUS / 10)  // note each target colour is two scorebands
+// Note each target ring colour is two scorebands.
+// This may have rounding errors.
+#define SCOREBAND_WIDTH (TARGET_RADIUS / 10)
 
 
 /******************************************************************************
@@ -230,16 +238,12 @@ static void draw_target(Layer *layer, GContext *ctx) {
 #if !PBL_CHALK
     // grass with drop-shadow
     graphics_color_rect(ctx, bounds, 0, GCornerNone, GColorMayGreen);
-
-    uint16_t shadow_radius = TARGET_RADIUS;
-#if PBL_RECT
-    shadow_radius += 5;  // bigger shadow looks better on rect
-#endif // PBL_RECT
+    const uint16_t shadow_radius = PBL_IF_RECT_ELSE(TARGET_RADIUS + 5, TARGET_RADIUS);  // bigger looks better on rect
     graphics_color_circle(ctx, (GPoint){center.x - 5, center.y + 5}, shadow_radius, GColorDarkGreen);
 #endif // !PBL_CHALK
 
     // face
-    const GColor colors[] = {
+    const GColor colors[TARGET_NUM_RINGS] = {
 #if PBL_COLOR
         GColorWhite,
         GColorBlack,
@@ -254,38 +258,20 @@ static void draw_target(Layer *layer, GContext *ctx) {
         GColorWhite,
 #endif // PBL_BW
     };
-
-    const int16_t ring_width = TARGET_RADIUS / ARRAY_LENGTH(colors);
-    for (size_t i = 0; i < ARRAY_LENGTH(colors); i++) {
-        graphics_color_circle(ctx, center, (ARRAY_LENGTH(colors) - i) * ring_width, colors[i]);
+    const int16_t ring_width = TARGET_RADIUS / TARGET_NUM_RINGS;
+    for (size_t i = 0; i < TARGET_NUM_RINGS; i++) {
+        graphics_color_circle(ctx, center, (TARGET_NUM_RINGS - i) * ring_width, colors[i]);
     }
     // 10spot
     graphics_color_circle(ctx, center, ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorBlack));
 
-    // black divider between all rings, except white between the blacks
-    // ... looks bad
-    // for (size_t i = 0; i < ARRAY_LENGTH(colors); i++) {
-    //     graphics_context_set_stroke_color(ctx, (i == 6) ? GColorLightGray : GColorBlack);
-    //     graphics_draw_circle(ctx, center, (i + 1) * ring_width);
-    //     LOG("radius %d", (i + 1) * ring_width);
-    // }
-
-    // clock lines
+    // clock indices
     GRect target_bounds = grect_crop(bounds, (bounds.size.w / 2) - TARGET_RADIUS);
-    // TODO wtf fix bounds calculation properly
-    if (target_bounds.size.w % 2) {
-        target_bounds.origin.x += 2;
-    }
-#if PBL_PLATFORM_EMERY
-    target_bounds.size.h += 2;
+#if !PBL_PLATFORM_CHALK
+    // correct for rounding errors, I guess?
     target_bounds.size.w += 2;
-#endif
-#if PBL_PLATFORM_GABBRO
-    target_bounds.origin.x += 2;
-    target_bounds.origin.y += 2;
-    target_bounds.size.w -= 1;
-    target_bounds.size.h -= 2;
-#endif // PBL_PLATFORM_GABBRO
+    target_bounds.size.h += 2;
+#endif // PBL_PLATFORM_CHALK
     graphics_context_set_stroke_width(ctx, 1);
     graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
     #define NUM_CLOCK_LINES (12)
