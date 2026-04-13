@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
-    B&W appstore resources
+    fix trophy location on time 2
     save last arrow conditions to pull at next init
 
     conditions
@@ -27,7 +27,13 @@
     shake too hard -> target falls off
     collision between shots and falling arrows (difficult)
 
-    user config options (silly)
+    digital display as scoreboard
+
+    user config options
+        reduce arrow randomness
+        vibe options
+        turn off accel/compass features
+
         carbon/aluminium/wooden arrows
         different faces
         darts
@@ -131,7 +137,7 @@ typedef enum Achievement {
   ACHIEVEMENT_MAX,  // end-of-enum indicator; the number of achievements
 } Achievement;
 
-Achievements s_achievements;  // The user's obtained achievements. Stored persistently.
+Achievements s_achievements = 0;  // The user's obtained achievements. Stored persistently.
 
 #define PERSIST_VERSION (1)  // The current persistent storage version
 
@@ -447,8 +453,13 @@ static Layer *s_layer_arrow;
 typedef enum ShotReason {
     SHOT_REASON_TICK = 0,
     SHOT_REASON_INIT,
-    SHOT_REASON_MANUAL
+    SHOT_REASON_SHAKE
 } ShotReason;
+
+static inline bool shot_reason_is_manual(ShotReason shot_reason) {
+    return (shot_reason == SHOT_REASON_SHAKE) || (shot_reason == SHOT_REASON_INIT);
+}
+
 
 // Context required to draw an arrow animation sequence
 typedef struct ArrowContext {
@@ -495,7 +506,7 @@ static void check_achievement_completion(void) {
         ArrowContext* const arrow = &s_arrows[i];
         if (arrow->frame) {
             for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
-                if ((arrow->shot_reason == SHOT_REASON_MANUAL) || (ach == ACHIEVEMENT_PURE_LUCK)) {
+                if (shot_reason_is_manual(arrow->shot_reason) || (ach == ACHIEVEMENT_PURE_LUCK)) {
                     if (achievement_in(arrow->achievements, ach)) {
                         success_count[ach] += 1;
                     }
@@ -638,7 +649,7 @@ static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
-        const uint32_t delay_between_arrows = (arrow->shot_reason == SHOT_REASON_MANUAL) ? 800 : 300;
+        const uint32_t delay_between_arrows = (arrow->shot_reason == SHOT_REASON_SHAKE) ? 800 : 300;
         arrow->timer = app_timer_register((arrow->frame < 1) ? delay_between_arrows : 50, &arrow_nextframe, arrow);
         ASSERT(arrow->timer != NULL);
     } else {  // shot animation complete
@@ -691,72 +702,8 @@ static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int1
     arrow_nextframe(arrow);
 }
 
-// TODO accelerometer upright, +- 4000 which is +-4G. compass app uses y < -700 to switch to upright.
-
-// Set the distance from centre that `arrow` will hit.
-static void arrow_determine_accuracy(ArrowContext *arrow) {
-    ASSERT(arrow->distance == ARROW_DISTANCE_UNINITIALISED);
-
-    const int32_t arrow_width = 3;
-
-    int32_t max_distance = TARGET_RADIUS - SCOREBAND_WIDTH;
-    if (is_hour_hand(arrow)) {  // ensure hour always on-screen
-        // TODO allow further in the corners of rect screens
-        max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
-    }
-
-    // Normally, you get a fixed small chance to hit the centre.
-    // Chosen to get both arrows in centre on average weekly when shooting once per minute.
-    bool hit_centre = (rand() % 100) == 0;
-    if (hit_centre) {
-        LOG("PERFECT HIT: RANDOM");
-        achievement_add(&arrow->achievements, ACHIEVEMENT_PURE_LUCK);
-    }
-
-    // But if you do a manual reshoot, there are conditions to force a perfect hit.
-    // If you get close to a condition, they give a clue by reducing the max distance.
-    int32_t clue_distance = max_distance;
-    if (arrow->shot_reason == SHOT_REASON_MANUAL) {
-        CompassHeadingData compass = {0};
-        (void)compass_service_peek(&compass);
-
-        // Condition #1: Align the arrow with compass North
-        if (DEBUG || (compass.compass_status >= CompassStatusCalibrating)) {
-            const int32_t clockwise_heading = TRIG_MAX_ANGLE - compass.true_heading;
-            const int32_t compass_deviation = ABSDIFF_WRAP(arrow->angle, clockwise_heading, DEG_TO_TRIGANGLE(360));
-            const int32_t hit_threshold = TRIG_MAX_ANGLE / MINUTES_PER_HOUR; // within 1 minute either side
-            const int32_t clue_threshold = DEG_TO_TRIGANGLE(45);  // this is either side, so *2 total degrees
-            LOG("clockwise_heading=%d, arrow->angle=%d, compass_deviation=%u",
-                TRIGANGLE_TO_DEG(clockwise_heading),
-                TRIGANGLE_TO_DEG(arrow->angle),
-                TRIGANGLE_TO_DEG(compass_deviation)
-            );
-            if (compass_deviation < hit_threshold) {
-                hit_centre = true;
-                LOG("PERFECT HIT: COMPASS");
-                achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
-            } else if (compass_deviation < clue_threshold) {
-                clue_distance = MIN(clue_distance, (max_distance * compass_deviation) / clue_threshold);
-                LOG("CLUE: COMPASS");
-            }
-        } else {
-            LOG("Compass error %i", compass.compass_status);
-        }
-    }
-
-    // now we have evaluated the conditions, choose how close to the centre this arrow goes
-    int32_t min_distance;
-    if (hit_centre) {
-        min_distance = 0;
-        max_distance = SCOREBAND_WIDTH - arrow_width;
-    } else {
-        min_distance = SCOREBAND_WIDTH + arrow_width;
-        max_distance = clue_distance;
-    }
-    arrow->distance = min_distance + (rand() % (max_distance - min_distance));
-    LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
-
 #if DEMO
+static void demo_override_arrow_hits(ArrowContext* arrow) {
     static int counter = 2;
     if (counter > 0) {
         if (arrow - s_arrows == 0) {
@@ -785,6 +732,84 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
     }
     counter--;
+}
+#endif // DEMO
+
+// TODO accelerometer upright, +- 4000 which is +-4G. compass app uses y < -700 to switch to upright.
+// 10 and 15 degrees
+
+// ACHIEVEMENT_COMPASS: Align the arrow with compass North
+static int32_t evaluate_achievement_compass(ArrowContext *arrow, int32_t max_distance, int32_t* clue_distance,
+                                            const CompassHeadingData *compass) {
+    bool success = false;
+    if (DEBUG || (compass->compass_status >= CompassStatusCalibrating)) {
+        const int32_t clockwise_heading = TRIG_MAX_ANGLE - compass->true_heading;
+        const int32_t compass_deviation = ABSDIFF_WRAP(arrow->angle, clockwise_heading, DEG_TO_TRIGANGLE(360));
+        const int32_t hit_threshold = TRIG_MAX_ANGLE / MINUTES_PER_HOUR; // within 1 minute either side
+        const int32_t clue_threshold = DEG_TO_TRIGANGLE(45);  // this is either side, so *2 total degrees
+        LOG("clockwise_heading=%d, arrow->angle=%d, compass_deviation=%u",
+            TRIGANGLE_TO_DEG(clockwise_heading),
+            TRIGANGLE_TO_DEG(arrow->angle),
+            TRIGANGLE_TO_DEG(compass_deviation)
+        );
+        if (compass_deviation < hit_threshold) {
+            success = true;
+            LOG("PERFECT HIT: COMPASS");
+            achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
+        } else if (compass_deviation < clue_threshold) {
+            *clue_distance = MIN(*clue_distance, (max_distance * compass_deviation) / clue_threshold);
+            LOG("CLUE: COMPASS");
+        }
+    } else {
+        LOG("Compass error %i", compass->compass_status);
+    }
+    return success;
+}
+
+
+// Set the distance from centre that `arrow` will hit.
+static void arrow_determine_accuracy(ArrowContext *arrow) {
+    ASSERT(arrow->distance == ARROW_DISTANCE_UNINITIALISED);
+
+    int32_t max_distance = TARGET_RADIUS - SCOREBAND_WIDTH;
+    if (is_hour_hand(arrow)) {  // ensure hour always on-screen
+        // TODO allow further in the corners of rect screens
+        max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
+    }
+
+    // Normally, you get a fixed small chance to hit the centre.
+    // Chosen to get both arrows in centre on average weekly when shooting once per minute.
+    bool hit_centre = (rand() % 100) == 0;
+    if (hit_centre) {
+        LOG("PERFECT HIT: RANDOM");
+        achievement_add(&arrow->achievements, ACHIEVEMENT_PURE_LUCK);
+    }
+
+    // But if you do a manual reshoot, there are conditions to force a perfect hit.
+    // If you get close to a condition, they give a clue by reducing the max distance.
+    int32_t clue_distance = max_distance;
+    if (shot_reason_is_manual(arrow->shot_reason)) {
+        CompassHeadingData compass = {0};
+        (void)compass_service_peek(&compass);
+
+        hit_centre |= evaluate_achievement_compass(arrow, max_distance, &clue_distance, &compass);
+    }
+
+    // now we have evaluated the conditions, choose how close to the centre this arrow goes
+    const int32_t arrow_width = 3;
+    int32_t min_distance;
+    if (hit_centre) {
+        min_distance = 0;
+        max_distance = SCOREBAND_WIDTH - arrow_width;
+    } else {
+        min_distance = SCOREBAND_WIDTH + arrow_width;
+        max_distance = clue_distance;
+    }
+    arrow->distance = min_distance + (rand() % (max_distance - min_distance));
+    LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
+
+#if DEMO
+    demo_override_arrow_hits(arrow);
 #endif // DEMO
 }
 
@@ -930,7 +955,7 @@ static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     TRACE("accel_tap_handler");
     if (!achievement_dismiss()) {
-        reshoot_all_arrows(SHOT_REASON_MANUAL);
+        reshoot_all_arrows(SHOT_REASON_SHAKE);
     }
 }
 
