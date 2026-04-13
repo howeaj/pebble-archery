@@ -2,7 +2,6 @@
 
 /* TODO
     B&W appstore resources
-    dont let hour go offscreen
     save last arrow conditions to pull at next init
 
     conditions
@@ -483,6 +482,9 @@ static ArrowContext s_arrows[MAX_ARROWS];
 static ArrowContext s_arrows_falling[MAX_ARROWS];
 static size_t s_arrows_falling_index = 0;  // the next slot in which to place a falling arrow
 
+static inline bool is_hour_hand(const ArrowContext* arrow) {
+    return arrow - s_arrows == 0;
+}
 
 static void check_achievement_completion(void) {
     const size_t num_relevant_arrows = 2;  // Only the hour and second hand, which are always in the first 2 slots.
@@ -695,8 +697,11 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
 
     const int32_t arrow_width = 3;
 
-    // TODO always keep hour arrow fully on-screen, or at least one arrow
     int32_t max_distance = TARGET_RADIUS - SCOREBAND_WIDTH;
+    if (is_hour_hand(arrow)) {  // ensure hour always on-screen
+        // TODO allow further in the corners of rect screens
+        max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
+    }
 
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
