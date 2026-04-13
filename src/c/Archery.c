@@ -599,9 +599,11 @@ static void arrow_hit_effects(ArrowContext* arrow) {
         // vibe
         if (arrow->shot_reason != SHOT_REASON_TICK) {
             if (arrow->achievements != 0) {
-                VIBE(500);
+                VIBE(300);
             } else {
-                VIBE(100);
+                if (arrow->shot_reason == SHOT_REASON_INIT) {
+                    VIBE(100);
+                }
             }
         }
     }
