@@ -299,7 +299,7 @@ static void draw_trophies(Layer *layer, GContext *ctx){
 #elif PBL_PLATFORM_EMERY  // TODO maybe do this at the top level instead
     const GRect bounds = grect_crop(layer_get_bounds(layer), 5);
 #else // PBL_RECT && !PBL_PLATFORM_EMERY
-    const GRect bounds = layer_get_bounds(layer);
+    const GRect bounds = grect_crop(layer_get_bounds(layer), 1);
 #endif // PBL_RECT && !PBL_PLATFORM_EMERY
 
     graphics_context_set_compositing_mode(ctx, GCompOpSet); // enable transparency
@@ -387,7 +387,7 @@ static bool achievement_notify(Achievement achievement) {
         text_layer_set_text(s_layer_notify, "Trophy won: LUCKY DAY\ntime to buy a lottery ticket!");
         break;
     case ACHIEVEMENT_COMPASS:
-        text_layer_set_text(s_layer_notify, "Trophy won: NORTH STAR\nmagnetic arrows are cheating!");
+        text_layer_set_text(s_layer_notify, "Trophy won: NORTH STAR\nwho magnetized my arrows?");
         break;
     case ACHIEVEMENT_MAX:
         if (s_notify_showing) {
