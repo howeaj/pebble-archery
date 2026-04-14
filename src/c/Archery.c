@@ -314,7 +314,7 @@ static void draw_target(Layer *layer, GContext *ctx) {
         graphics_color_circle(ctx, center, (TARGET_NUM_RINGS - i) * ring_width, colors[i]);
     }
     // 10spot
-    graphics_color_circle(ctx, center, ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorBlack));
+    graphics_color_circle(ctx, center, ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorLightGray));
 
     // clock indices
     GRect target_bounds = grect_crop(bounds, (bounds.size.w / 2) - TARGET_RADIUS);
@@ -534,11 +534,12 @@ typedef struct ArrowContext {
     Achievements achievements;  // achievements for which this arrow has met the conditions
 } ArrowContext;
 
-
 #define MAX_ARROWS (3)
 #define ARROW_NUM_FRAMES (4)
 #define GColorWood GColorWindsorTan
 #define ARROW_DISTANCE_UNINITIALISED (-1)
+#define ARROW_LENGTH_LONG ((TARGET_RADIUS * 7) / 10)
+#define ARROW_LENGTH_SHORT ((TARGET_RADIUS) / 2)
 
 static ArrowContext s_arrows[MAX_ARROWS];
 // 3 indices of s_arrows are reserved for the hour/minutes/seconds hand
@@ -752,10 +753,6 @@ static void arrow_pull(ArrowContext* original_arrow) {
 static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int16_t delay, ShotReason shot_reason) {
     ASSERT(delay >= 0);
     LOG("Shooting arrow %d", arrow - s_arrows);
-
-#if PBL_DISPLAY_WIDTH < 200  // TODO calculate based on screen width in the first place
-    length -= 10;
-#endif // PBL_DISPLAY_WIDTH
 
     arrow_pull(arrow);
 
@@ -1066,7 +1063,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
 #if SECOND_HAND
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
-        const int32_t length = 70;
+        const int32_t length = ARROW_LENGTH_LONG;
         arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, shot_reason);
         delay++;
     }
@@ -1075,7 +1072,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
         CompassHeadingData compass = {0};
         if (compass_service_peek_logged(&compass)) {  // TODO indicate compass not calibrated
             const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading - DEG_TO_TRIGANGLE(45);
-            const int32_t length = 70;
+            const int32_t length = ARROW_LENGTH_LONG;
             delay = 0;
             arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, SHOT_REASON_COMPASS);
             delay++;
@@ -1085,7 +1082,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
-        const int32_t length = 70;
+        const int32_t length = ARROW_LENGTH_LONG;
         arrow_shoot(&s_arrows[MINUTE_ARROW_INDEX], angle, length, delay, shot_reason);
         delay++;
 
@@ -1094,7 +1091,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
                 ((s_state.hour * MINUTES_PER_HOUR) + s_state.min)
                 * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
             );
-            const int32_t length = 50;
+            const int32_t length = ARROW_LENGTH_SHORT;
             arrow_shoot(&s_arrows[HOUR_ARROW_INDEX], angle, length, delay, shot_reason);
             delay++;
         }
