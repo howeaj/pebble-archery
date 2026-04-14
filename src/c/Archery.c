@@ -1007,7 +1007,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
                 // Vertical air resistance scales with downward-velocity and horizontalness.
                 const int32_t velocity_scalar = 8 * (arrow->velocity.y * arrow->velocity.y);
                 // Sine gives us horizontalness and also the direction in which to turn.
-                const int32_t turn = (velocity_scalar * sin_lookup(arrow->angle)) / TRIG_MAX_RATIO;
+                const int32_t turn = (velocity_scalar * sin_lookup(current_angle)) / TRIG_MAX_RATIO;
                 if (ABSDIFF_WRAP(current_angle, DEG_TO_TRIGANGLE(0), DEG_TO_TRIGANGLE(360)) > ABS(turn)) {
                     arrow->offset_angle -= turn;
                 } else {
