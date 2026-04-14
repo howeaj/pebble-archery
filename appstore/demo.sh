@@ -21,7 +21,7 @@ sleep 1
 
 # setup for start of recording
 pebble emu-set-time --emulator $1 12:22:00  # TODO this doesn't work at all >:(
-pebble emu-button click back --emulator $1
+pebble emu-button click select --emulator $1
 
 set +x
 read -n 1 -s -r -p "Start recording, then press any key to continue"
@@ -30,8 +30,6 @@ set -x
 
 
 pebble emu-button click back --emulator $1
-pebble emu-tap --emulator $1
-pebble emu-button click back --emulator $1
 sleep 0.5
 
 pebble emu-button click back --emulator $1
@@ -43,7 +41,3 @@ pebble emu-button click back --emulator $1
 pebble emu-tap --emulator $1
 pebble emu-button click back --emulator $1
 sleep 0.5
-
-pebble emu-button click back --emulator $1
-pebble emu-tap --emulator $1
-pebble emu-button click back --emulator $1

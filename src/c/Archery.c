@@ -147,7 +147,7 @@ static bool accel_service_peek_logged(AccelData* data) {
 static bool compass_service_peek_logged(CompassHeadingData* data) {
     bool success = true;
     (void)compass_service_peek(data);
-    if (data->compass_status < CompassStatusCalibrating) {
+    if (!DEBUG && (data->compass_status < CompassStatusCalibrating)) {
         LOG("COMPASS ERROR: %i", data->compass_status);
         success = false;
     }
@@ -502,7 +502,8 @@ static Layer *s_layer_arrow;
 typedef enum ShotReason {
     SHOT_REASON_TICK = 0,
     SHOT_REASON_INIT,
-    SHOT_REASON_SHAKE
+    SHOT_REASON_SHAKE,
+    SHOT_REASON_COMPASS
 } ShotReason;
 
 static inline bool shot_reason_is_manual(ShotReason shot_reason) {
@@ -615,8 +616,9 @@ static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t
     // shaft
     const GPoint tip = arrow_tip(layer, arrow);
     const GPoint tail = point_from_angle(tip, shaft_angle, arrow->length);
+    const GColor shaft_color = (arrow->shot_reason == SHOT_REASON_COMPASS) ? GColorDarkCandyAppleRed : GColorWood;
     graphics_context_set_stroke_width(ctx, 2);
-    graphics_context_set_stroke_color(ctx, GColorWood);
+    graphics_context_set_stroke_color(ctx, shaft_color);
     graphics_draw_line(ctx, tip, tail);
 
     // point
@@ -669,10 +671,10 @@ static void arrow_hit_effects(ArrowContext* arrow) {
         arrow->hit_effects_started = true;
         // vibe
         if (arrow->shot_reason != SHOT_REASON_TICK) {
-            if (arrow->achievements != 0) {
+            if ((DEMO && (arrow->distance < 10)) || arrow->achievements != 0) {
                 VIBE(300);
             } else {
-                if (arrow->shot_reason == SHOT_REASON_INIT) {
+                if (DEMO || (arrow->shot_reason == SHOT_REASON_INIT)) {
                     VIBE(100);
                 }
             }
@@ -698,9 +700,15 @@ static void arrow_frame_3(Layer *layer, GContext *ctx, ArrowContext* arrow) {
 #endif // DEBUG
 }
 
+static void arrow_pull(ArrowContext* original_arrow); // TODO move
+
 // Final resting state
 static void arrow_frame_4(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     draw_arrow(layer, ctx, arrow, 0, false);
+
+    if (arrow->shot_reason == SHOT_REASON_COMPASS) {
+        arrow_pull(arrow);
+    }
 }
 
 // Increment the arrow's shooting animation frame, schedule it for rendering,
@@ -757,8 +765,12 @@ static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int1
     arrow->angle = angle;
     arrow->length = length;
     arrow->frame = 0 - delay;
-    arrow->color = (GColor8){.argb=rand() % UINT8_MAX};  // TODO limit colours to nice bright ones or signify hour/min/sec
 
+    if (shot_reason == SHOT_REASON_COMPASS) {
+        arrow->color = GColorDarkCandyAppleRed;
+    } else {
+        arrow->color = (GColor8){.argb=rand() % UINT8_MAX};  // TODO limit colours to nice bright ones or signify hour/min/sec
+    }
     arrow_nextframe(arrow);
 }
 
@@ -767,29 +779,25 @@ static void demo_override_arrow_hits(ArrowContext* arrow) {
     static int counter = 2;
     if (counter > 0) {
         if (arrow - s_arrows == 0) {
-            arrow->distance = 29;//17; // gabbro 29;
             arrow->color = GColorCyan;
         } else {
-            arrow->distance = 30;//50;// gabbro 55;
             arrow->color = GColorMagenta;
         }
     } else if (counter > -2) {
         if (arrow - s_arrows == 0) {
-            arrow->distance = 14; // gabbro 29;
             arrow->color = GColorRed;
-        } else {
-            arrow->distance = 60;// gabbro 55;
+        } else if (arrow - s_arrows == 1){
             arrow->color = GColorGreen;
         }
     } else {
         if (arrow - s_arrows == 0) {
-            arrow->distance = 2; // gabbro 29;
+            arrow->distance = 5;
             arrow->color = GColorGreen;
-        } else {
-            arrow->distance = 6;// gabbro 55;
+        } else if (arrow - s_arrows == 1){
+            arrow->distance = 13;// gabbro 55;
             arrow->color = GColorYellow;
         }
-        achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
+        // achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
     }
     counter--;
 }
@@ -937,6 +945,13 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         min_distance = SCOREBAND_WIDTH + arrow_width;
         max_distance = clue_distance;
     }
+
+#if DEMO
+    if (!is_hour_hand(arrow) && (arrow->shot_reason != SHOT_REASON_COMPASS)) {
+        max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - (arrow->length/2);
+    }
+#endif // DEMO
+
     arrow->distance = min_distance + (rand() % (max_distance - min_distance));
     LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
 
@@ -1051,7 +1066,18 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
         arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, shot_reason);
         delay++;
     }
-#endif // SECOND_HAND
+#else // !SECOND_HAND
+    if (shot_reason == SHOT_REASON_SHAKE) {
+        CompassHeadingData compass = {0};
+        if (compass_service_peek_logged(&compass)) {  // TODO indicate compass not calibrated
+            const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading - DEG_TO_TRIGANGLE(45);
+            const int32_t length = 70;
+            delay = 0;
+            arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, SHOT_REASON_COMPASS);
+            delay++;
+        }
+    }
+#endif // !SECOND_HAND
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
@@ -1126,9 +1152,7 @@ static void main_window_load(Window *window) {
     achievements_load();
     (void)achievement_dismiss();
 
-#if !DEMO
     reshoot_all_arrows(SHOT_REASON_INIT);
-#endif // !DEMO
 
     s_initialising = false;
 }
