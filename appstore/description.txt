@@ -1,19 +1,18 @@
 Watch out! Tiny archers are shooting your wrist, but luckily the arrows always point to the current time! Can you help them hit the centre?
 
-A fun animated watchface, with a small game and other secrets to discover.
+A fun animated watchface, compass and game with secrets to discover.
 
 Instructions:
- - Shake to reshoot new arrows, then align each one with compass North just before they arrive to hit the centre.
- - Get two perfect hits for a small surprise.
+ - Shake to shoot a red compass arrow indicating North (if it doesn't arrive, move your watch around to calibrate the compass)
+ - Quickly turn your Pebble to align the hour and minute arrows with North as they arrive to score a perfect hit.
+ - Get both arrows perfectly in the centre together for a small surprise.
  - There's also a random chance to hit the centre regardless; some say luck is also a skill...
 
-Supports all pebbles*, but it's perfect for the new big-colour-screen Time 2 and especially Round 2!
-Note the compass is turned off to save power unless you shake, so this still works well as just a watchface.
+Supports all pebbles, but it's perfect for the new big-colour-screen Time 2 and Round 2!
+Note the compass is turned off to save power until you shake.
 
 Planned updates:
+ - Indicate low battery with lazy arrows
  - More ways to win
  - More fun special effects
- - Customisation options (more/less vibes, enable second hand, change target face / arrow colours, etc.)
- - Boring stuff (battery indicator etc.)
-
-*the original Pebble 2 does not have a compass, so that aspect won't work.
+ - Customisation options

@@ -778,22 +778,22 @@ static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int1
 static void demo_override_arrow_hits(ArrowContext* arrow) {
     static int counter = 2;
     if (counter > 0) {
-        if (arrow - s_arrows == 0) {
+        if (is_hour_hand(arrow)) {
             arrow->color = GColorCyan;
         } else {
             arrow->color = GColorMagenta;
         }
     } else if (counter > -2) {
-        if (arrow - s_arrows == 0) {
+        if (is_hour_hand(arrow)) {
             arrow->color = GColorRed;
-        } else if (arrow - s_arrows == 1){
+        } else{
             arrow->color = GColorGreen;
         }
     } else {
-        if (arrow - s_arrows == 0) {
+        if (is_hour_hand(arrow)) {
             arrow->distance = 5;
             arrow->color = GColorGreen;
-        } else if (arrow - s_arrows == 1){
+        } else{
             arrow->distance = 13;// gabbro 55;
             arrow->color = GColorYellow;
         }
@@ -910,6 +910,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
     }
 
+#if !DEMO
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
     bool hit_centre = (rand() % 100) == 0;
@@ -946,17 +947,20 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         max_distance = clue_distance;
     }
 
-#if DEMO
-    if (!is_hour_hand(arrow) && (arrow->shot_reason != SHOT_REASON_COMPASS)) {
-        max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - (arrow->length/2);
+#else // DEMO
+    if (!is_hour_hand(arrow)){
+        max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
     }
+    int32_t min_distance = 10;
 #endif // DEMO
 
     arrow->distance = min_distance + (rand() % (max_distance - min_distance));
     LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
 
 #if DEMO
-    demo_override_arrow_hits(arrow);
+    if (arrow->shot_reason != SHOT_REASON_COMPASS) {
+        demo_override_arrow_hits(arrow);
+    }
 #endif // DEMO
 }
 
