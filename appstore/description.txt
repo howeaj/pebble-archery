@@ -1,21 +1,19 @@
-Watch out! Tiny archers are shooting your wrist, but luckily the arrows always point to the current time!
-Their aim is a bit off, but if you can figure out how to help them you may be handsomely rewarded.
+Watch out! Tiny archers are shooting your wrist, but luckily the arrows always point to the current time! Can you help them hit the centre?
 
-A crisp, fully animated and fun watchface with secrets. Supports all pebbles, but it's perfect for the new big-colour-screen Time 2 and especially Round 2!
+A fun animated watchface, with a small game and other secrets to discover.
 
 Instructions:
- - The long arrow is minutes; the short, hours.
- - Shake/tap to reshoot.
- - Hit the centre by fulfilling secret conditions; think about the hardware features your pebble has, and experiment to find them!
- - Getting closer to the condition makes the arrows more accurate, but there is a small threshold to get a perfect hit every time.
+ - Shake to reshoot new arrows, then align each one with compass North just before they arrive to hit the centre.
+ - Get two perfect hits for a small surprise.
  - There's also a random chance to hit the centre regardless; some say luck is also a skill...
 
-Aside from random chance, there is currently 1 perfect hit condition, for which I've left a clue in this appstore listing! Please check back in a few days; I will quickly add 2 more and a final secret unlock for anyone who wins all 4 trophies. (edit: another clue - the first trophy is not possible to achieve on Pebble 2, but it works on Pebble 2 Duo, Time 2 and all other platforms.)
+Supports all pebbles*, but it's perfect for the new big-colour-screen Time 2 and especially Round 2!
+Note the compass is turned off to save power unless you shake, so this still works well as just a watchface.
 
-I'll also be making this app open-source, leaving the (maybe obfuscated) code as the final clue for those brave enough ;)
+Planned updates:
+ - More ways to win
+ - More fun special effects
+ - Customisation options (more/less vibes, enable second hand, change target face / arrow colours, etc.)
+ - Boring stuff (battery indicator etc.)
 
-Future planned updates:
- - more trophies
- - more fun special effects (breakages, bouncers and robin hoods, etc.)
- - customisation options (disable vibes, enable second hand, change target face / arrow colours, etc.)
- - boring stuff (battery indicator etc.)
+*the original Pebble 2 does not have a compass, so that aspect won't work.
