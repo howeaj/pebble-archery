@@ -746,7 +746,8 @@ static void arrow_pull(ArrowContext* original_arrow) {
     original_arrow->frame = 0;
 
     // pull out in the direction of the arrow
-    arrow->velocity = point_from_angle(GPointZero, arrow->angle, 10);
+    // note this velocity should be at least the length of the arrowpoint
+    arrow->velocity = point_from_angle(GPointZero, arrow->angle, (PBL_DISPLAY_WIDTH < 200) ? 6 : 10);
 }
 
 // Start a new arrow shoot sequence
@@ -1005,7 +1006,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
             arrow->offset_pos.y += arrow->velocity.y;
 
             // velocity
-            arrow->velocity.y += 2;  // gravity TODO change according to pebble's orientation
+            arrow->velocity.y += (PBL_DISPLAY_WIDTH < 200) ? 1 : 2;  // gravity TODO change according to pebble's orientation
             if (ABS(arrow->velocity.x) > 2) {  // air resistance
                 arrow->velocity.x -= SIGN(arrow->velocity.x);
             }
