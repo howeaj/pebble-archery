@@ -1,8 +1,15 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
+    indicate where north is after achievement fail
+
+    condition complete celebration effects
+        arrow spam
     fix trophy location on time 2
     save last arrow conditions to pull at next init
+
+
+    low battery indicator: slow wobbly arrow
 
     conditions
         pure luck (1/10,000)
@@ -12,9 +19,6 @@
         align "up" with each arrow
             (extra: when arrows aren't close together)
         robin hood
-    condition complete celebration effects
-        arrow spam
-    hint every X shakes in a row
 
     leave holes behind?
     special animation for robin hoods
@@ -122,6 +126,47 @@ static int32_t normalize_angle(int32_t angle) {
 }
 
 
+// from measurements https://discord.com/channels/221364737269694464/264746316477759489/1492708645425909902
+#define ACCEL_NOISE_MAX (50)  // the max change in each accel reading when perfectly still
+#define ACCEL_1G (1000)  // 1G of force in accel sensor units
+
+// return true on success
+static bool accel_service_peek_logged(AccelData* data) {
+    const int retval = accel_service_peek(data);
+    if (retval == -1) {
+        LOG("ACCEL ERROR: not running");
+    } else if (retval == -2) {
+        LOG("ACCEL ERROR: subscribed");
+    } else if (retval < 0) {
+        LOG("ACCEL ERROR: unknown");
+    }
+    return retval >= 0;
+}
+
+// return true on success
+static bool compass_service_peek_logged(CompassHeadingData* data) {
+    bool success = true;
+    (void)compass_service_peek(data);
+    if (data->compass_status < CompassStatusCalibrating) {
+        LOG("COMPASS ERROR: %i", data->compass_status);
+        success = false;
+    }
+    return success;
+}
+
+// quake 3 sqrt
+static float fast_sqrt(const float x) {
+    const float xhalf = 0.5f * x;
+    union {
+        float x;
+        int i;
+    } u;
+    u.x = x;
+    u.i = 0x5f3759df - (u.i >> 1);  // initial guess
+    return x * u.x * (1.5f - xhalf * u.x * u.x);  // Newton step
+}
+
+
 /******************************************************************************
  Achievements
 ******************************************************************************/
@@ -133,6 +178,7 @@ typedef uint32_t Achievements; // Bitfield, each bit indexed by Achievement
 typedef enum Achievement {
   ACHIEVEMENT_PURE_LUCK = 0,
   ACHIEVEMENT_COMPASS   = 1,
+  ACHIEVEMENT_UPRIGHT   = 2,
 
   ACHIEVEMENT_MAX,  // end-of-enum indicator; the number of achievements
 } Achievement;
@@ -395,6 +441,9 @@ static bool achievement_notify(Achievement achievement) {
     case ACHIEVEMENT_COMPASS:
         text_layer_set_text(s_layer_notify, "Trophy won: NORTH STAR\nwho magnetized my arrows?");
         break;
+    case ACHIEVEMENT_UPRIGHT:
+        text_layer_set_text(s_layer_notify, "Trophy won: PERFECT SETUP\njust like a real target");
+        break;
     case ACHIEVEMENT_MAX:
         if (s_notify_showing) {
             dismissed = true;
@@ -484,14 +533,25 @@ typedef struct ArrowContext {
     Achievements achievements;  // achievements for which this arrow has met the conditions
 } ArrowContext;
 
+
 #define MAX_ARROWS (3)
 #define ARROW_NUM_FRAMES (4)
 #define GColorWood GColorWindsorTan
 #define ARROW_DISTANCE_UNINITIALISED (-1)
 
 static ArrowContext s_arrows[MAX_ARROWS];
+// 3 indices of s_arrows are reserved for the hour/minutes/seconds hand
+#define HOUR_ARROW_INDEX    (0)
+#define MINUTE_ARROW_INDEX  (1)
+#define SECOND_ARROW_INDEX  (2)
+
+#define LAST_ARROW_SHOT HOUR_ARROW_INDEX  // the last arrow to be shot on each round
+
+
 static ArrowContext s_arrows_falling[MAX_ARROWS];
+// s_arrows_falling is just a circular buffer, no reserved slots
 static size_t s_arrows_falling_index = 0;  // the next slot in which to place a falling arrow
+
 
 static inline bool is_hour_hand(const ArrowContext* arrow) {
     return arrow - s_arrows == 0;
@@ -735,33 +795,98 @@ static void demo_override_arrow_hits(ArrowContext* arrow) {
 }
 #endif // DEMO
 
-// TODO accelerometer upright, +- 4000 which is +-4G. compass app uses y < -700 to switch to upright.
-// 10 and 15 degrees
+// ACHIEVEMENT_UPRIGHT: Keep it still and upright (slight tilt back) like a real target
+static int32_t evaluate_achievement_upright(ArrowContext *arrow, int32_t max_distance, int32_t* clue_distance,
+                                            const AccelData *accel) {
+    bool success = false;
+
+    // note ACCEL_MAX_NOISE is 50, or about 5 degrees of tilt from pure gravity
+    // Relative to the pebble's screen:
+    //  x axis is sideways; through the buttons. +x is towards the select button.
+    //  y axis is upwards; through the wristband. +y is up.
+    //  z axis is perpendicular; through the screen. +z is towards the viewer.
+
+    // calculate deviations i.e. how far (in accel counts) they were from meeting the criteria
+
+    // x should be parallel with the ground; no forces
+    const int16_t deviation_x = MAX(0, ABSDIFF(accel->x, 0) - ACCEL_NOISE_MAX);
+
+    // the hypotenuse of y and z should sum to 1G; no additional forces
+    const int16_t deviation_yz = MAX(0, ABSDIFF(fast_sqrt(SQUARE(accel->y) + SQUARE(accel->z)), ACCEL_1G));
+
+    // accept between 5 and 15 degrees tilted backwards
+    // i.e. -10 degrees += 5. small negative z, large negative y
+    // The hypotenuse is gravity, which is always 1G
+    //    /|<- angle away from perfectly straight up
+    //   / |
+    //  /  y
+    // /_z_|
+    // TODO just calculate all these once
+    const int16_t ideal_angle = DEG_TO_TRIGANGLE(-10);
+    const int16_t ideal_y = (cos_lookup(ideal_angle) * ACCEL_1G) / TRIG_MAX_RATIO;
+    const int16_t ideal_z = (sin_lookup(ideal_angle) * ACCEL_1G) / TRIG_MAX_RATIO;
+    const int16_t threshold_angle = 5;
+    const int16_t threshold_y = (cos_lookup(threshold_angle) * ACCEL_1G) / TRIG_MAX_RATIO;
+    const int16_t threshold_z = (sin_lookup(threshold_angle) * ACCEL_1G) / TRIG_MAX_RATIO;
+    const int16_t deviation_y = MAX(0, ABSDIFF(accel->y, ideal_y) - threshold_y - ACCEL_NOISE_MAX);
+    const int16_t deviation_z = MAX(0, ABSDIFF(accel->z, ideal_z) - threshold_z - ACCEL_NOISE_MAX);
+
+    const int32_t total_deviation = deviation_x + deviation_y + deviation_z + deviation_yz;
+    LOG("x=%d, y=%d, z=%d, tot=%d, devX=%d, devY=%d, devZ=%d, devYZ=%d",
+        accel->x, accel->y, accel->z, total_deviation, deviation_x, deviation_y, deviation_z, deviation_yz);
+    const bool is_upright = (total_deviation == 0);
+
+    static AccelData accel_other = {0};
+    STATIC_ASSERT(LAST_ARROW_SHOT == HOUR_ARROW_INDEX);
+    if (is_hour_hand(arrow)) {
+        // must not move between the two shots
+        const bool is_still = MAX(
+            ABSDIFF(accel->x, accel_other.x),
+            MAX(ABSDIFF(accel->y, accel_other.y),
+                ABSDIFF(accel->z, accel_other.z))
+        ) < ACCEL_NOISE_MAX;
+        LOG("is_still=%s", BOOL_TO_STR(is_still));
+
+        success = is_upright && is_still;
+    } else {
+        success = is_upright;
+        accel_other = *accel;
+    }
+
+    if (success) {
+        LOG("PERFECT HIT: UPRIGHT");
+        achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
+    } else {
+        LOG("CLUE: UPRIGHT");
+        // increase arrow accuracy if we get close
+        const int16_t clue_threshold = 500; // TODO test
+        if (total_deviation < clue_threshold) {
+            *clue_distance = (max_distance * total_deviation) / clue_threshold;
+        }
+    }
+    return success;
+}
 
 // ACHIEVEMENT_COMPASS: Align the arrow with compass North
-static int32_t evaluate_achievement_compass(ArrowContext *arrow, int32_t max_distance, int32_t* clue_distance,
+static bool evaluate_achievement_compass(ArrowContext *arrow, int32_t max_distance, int32_t* clue_distance,
                                             const CompassHeadingData *compass) {
     bool success = false;
-    if (DEBUG || (compass->compass_status >= CompassStatusCalibrating)) {
-        const int32_t clockwise_heading = TRIG_MAX_ANGLE - compass->true_heading;
-        const int32_t compass_deviation = ABSDIFF_WRAP(arrow->angle, clockwise_heading, DEG_TO_TRIGANGLE(360));
-        const int32_t hit_threshold = TRIG_MAX_ANGLE / MINUTES_PER_HOUR; // within 1 minute either side
-        const int32_t clue_threshold = DEG_TO_TRIGANGLE(45);  // this is either side, so *2 total degrees
-        LOG("clockwise_heading=%d, arrow->angle=%d, compass_deviation=%u",
-            TRIGANGLE_TO_DEG(clockwise_heading),
-            TRIGANGLE_TO_DEG(arrow->angle),
-            TRIGANGLE_TO_DEG(compass_deviation)
-        );
-        if (compass_deviation < hit_threshold) {
-            success = true;
-            LOG("PERFECT HIT: COMPASS");
-            achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
-        } else if (compass_deviation < clue_threshold) {
-            *clue_distance = MIN(*clue_distance, (max_distance * compass_deviation) / clue_threshold);
-            LOG("CLUE: COMPASS");
-        }
-    } else {
-        LOG("Compass error %i", compass->compass_status);
+    const int32_t clockwise_heading = TRIG_MAX_ANGLE - compass->true_heading;
+    const int32_t compass_deviation = ABSDIFF_WRAP(arrow->angle, clockwise_heading, DEG_TO_TRIGANGLE(360));
+    const int32_t hit_threshold = TRIG_MAX_ANGLE / MINUTES_PER_HOUR; // within 1 minute either side
+    const int32_t clue_threshold = DEG_TO_TRIGANGLE(45);  // this is either side, so *2 total degrees
+    LOG("clockwise_heading=%d, arrow->angle=%d, compass_deviation=%u",
+        TRIGANGLE_TO_DEG(clockwise_heading),
+        TRIGANGLE_TO_DEG(arrow->angle),
+        TRIGANGLE_TO_DEG(compass_deviation)
+    );
+    if (compass_deviation < hit_threshold) {
+        success = true;
+        LOG("PERFECT HIT: COMPASS");
+        achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
+    } else if (compass_deviation < clue_threshold) {
+        *clue_distance = MIN(*clue_distance, (max_distance * compass_deviation) / clue_threshold);
+        LOG("CLUE: COMPASS");
     }
     return success;
 }
@@ -790,9 +915,16 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     int32_t clue_distance = max_distance;
     if (shot_reason_is_manual(arrow->shot_reason)) {
         CompassHeadingData compass = {0};
-        (void)compass_service_peek(&compass);
+        const bool compass_valid = compass_service_peek_logged(&compass);
+        AccelData accel = {0};
+        const bool accel_valid = accel_service_peek_logged(&accel);
 
-        hit_centre |= evaluate_achievement_compass(arrow, max_distance, &clue_distance, &compass);
+        if (compass_valid) {
+            hit_centre |= evaluate_achievement_compass(arrow, max_distance, &clue_distance, &compass);
+        }
+        if (accel_valid) {
+            hit_centre |= evaluate_achievement_upright(arrow, max_distance, &clue_distance, &accel);
+        }
     }
 
     // now we have evaluated the conditions, choose how close to the centre this arrow goes
@@ -903,6 +1035,8 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
  Handlers
 ******************************************************************************/
 
+STATIC_ASSERT(LAST_ARROW_SHOT == HOUR_ARROW_INDEX);
+// Shoot all arrows, ending with the hour hand
 static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, ShotReason shot_reason) {
     s_state.hour = tick_time->tm_hour % 12;
     s_state.min = tick_time->tm_min;
@@ -914,7 +1048,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
         const int32_t length = 70;
-        arrow_shoot(&s_arrows[2], angle, length, delay, shot_reason);
+        arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, shot_reason);
         delay++;
     }
 #endif // SECOND_HAND
@@ -922,7 +1056,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
         const int32_t length = 70;
-        arrow_shoot(&s_arrows[1], angle, length, delay, shot_reason);
+        arrow_shoot(&s_arrows[MINUTE_ARROW_INDEX], angle, length, delay, shot_reason);
         delay++;
 
         { // hours
@@ -931,7 +1065,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
                 * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
             );
             const int32_t length = 50;
-            arrow_shoot(&s_arrows[0], angle, length, delay, shot_reason);
+            arrow_shoot(&s_arrows[HOUR_ARROW_INDEX], angle, length, delay, shot_reason);
             delay++;
         }
     }
