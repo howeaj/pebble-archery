@@ -116,16 +116,6 @@ static GPoint point_from_angle(GPoint origin, int32_t angle, int32_t distance) {
     };
 }
 
-// Normalize an angle to the range [0, TRIG_MAX_ANGLE] (from trig.c)
-static int32_t normalize_angle(int32_t angle) {
-    int32_t normalized_angle = ABS(angle) % TRIG_MAX_ANGLE;
-    if (angle < 0) {
-        normalized_angle = TRIG_MAX_ANGLE - normalized_angle;
-    }
-    return normalized_angle;
-}
-
-
 // from measurements https://discord.com/channels/221364737269694464/264746316477759489/1492708645425909902
 #define ACCEL_NOISE_MAX (50)  // the max change in each accel reading when perfectly still
 #define ACCEL_1G (1000)  // 1G of force in accel sensor units
@@ -1013,15 +1003,12 @@ static void animate_fall(Layer* layer, GContext* ctx) {
 
             // rotation; turn to point downwards (i.e. angle towards 0) with vertical air resistance
             if (arrow->velocity.y > 0) {
+                const int32_t current_angle = arrow->angle + arrow->offset_angle;
                 // Vertical air resistance scales with downward-velocity and horizontalness.
                 const int32_t velocity_scalar = 8 * (arrow->velocity.y * arrow->velocity.y);
                 // Sine gives us horizontalness and also the direction in which to turn.
                 const int32_t turn = (velocity_scalar * sin_lookup(arrow->angle)) / TRIG_MAX_RATIO;
-                // shift angle so that 0 is mid-range i.e. DEG_TO_TRIGANGLE(180) for easy comparison
-                // TODO use ABSDIFF_WRAP?
-                const int32_t shifted_angle = normalize_angle(
-                    arrow->angle + arrow->offset_angle + DEG_TO_TRIGANGLE(180));
-                if (ABSDIFF(shifted_angle, DEG_TO_TRIGANGLE(180)) > ABS(turn)) {
+                if (ABSDIFF_WRAP(current_angle, DEG_TO_TRIGANGLE(0), DEG_TO_TRIGANGLE(360)) > ABS(turn)) {
                     arrow->offset_angle -= turn;
                 } else {
                     arrow->offset_angle = -arrow->angle;
