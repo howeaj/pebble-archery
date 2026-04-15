@@ -78,6 +78,31 @@ State s_state;
 // This may have rounding errors.
 #define SCOREBAND_WIDTH (TARGET_RADIUS / 10)
 
+// Fonts
+#if PBL_DISPLAY_WIDTH >= 240
+    #define FONT_KEY_MED FONT_KEY_GOTHIC_24
+    #define FONT_H_MED (24)
+    #define FONT_KEY_SMALL FONT_KEY_GOTHIC_18
+    #define FONT_H_SMALL (18)
+#elif PBL_DISPLAY_WIDTH >= 160
+    #if PBL_ROUND
+        #define FONT_KEY_MED FONT_KEY_GOTHIC_14
+        #define FONT_H_MED (14)
+        #define FONT_KEY_SMALL FONT_KEY_GOTHIC_09
+        #define FONT_H_SMALL (9)
+    #else // PBL_RECT
+        #define FONT_KEY_MED FONT_KEY_GOTHIC_18
+        #define FONT_H_MED (18)
+        #define FONT_KEY_SMALL FONT_KEY_GOTHIC_14
+        #define FONT_H_SMALL (14)
+    #endif // PBL_RECT
+#else // PBL_DISPLAY_WIDTH < 160
+    #define FONT_KEY_MED FONT_KEY_GOTHIC_14
+    #define FONT_H_MED (14)
+    #define FONT_KEY_SMALL FONT_KEY_GOTHIC_09
+    #define FONT_H_SMALL (9)
+#endif // PBL_DISPLAY_WIDTH < 160
+
 
 /******************************************************************************
  Generic functions
@@ -133,17 +158,6 @@ static bool accel_service_peek_logged(AccelData* data) {
     return retval >= 0;
 }
 
-// return true on success
-static bool compass_service_peek_logged(CompassHeadingData* data) {
-    bool success = true;
-    (void)compass_service_peek(data);
-    if (!DEBUG && (data->compass_status < CompassStatusCalibrating)) {
-        LOG("COMPASS ERROR: %i", data->compass_status);
-        success = false;
-    }
-    return success;
-}
-
 // quake 3 sqrt
 static float fast_sqrt(const float x) {
     const float xhalf = 0.5f * x;
@@ -155,6 +169,106 @@ static float fast_sqrt(const float x) {
     u.i = 0x5f3759df - (u.i >> 1);  // initial guess
     return x * u.x * (1.5f - xhalf * u.x * u.x);  // Newton step
 }
+
+/// Animate `layer` to `appear` or disappear by scrolling pixels vertically `from_below` or above.
+/// `was_visible` a pointer to a static bool; will be updated
+static void animate_scroll(Layer *layer, bool appear, bool from_below, bool* was_visible) {
+    const int16_t hide_offset = (from_below ? 1 : -1) * layer_get_bounds(layer).size.h;
+    GPoint hidden_point = GPoint(0, hide_offset);
+    GPoint zero = GPoint(0, 0);
+    GPoint *from = NULL;
+    GPoint *to = NULL;
+    if (appear) {
+        from = &hidden_point;
+        to = &zero;
+    } else {
+        // from wherever it currently is
+        to = &hidden_point;
+    }
+
+    if (s_initialising) {  // start in the correct location
+        GRect bounds = layer_get_bounds(layer);
+        bounds.origin = *to;
+        layer_set_bounds(layer, bounds);
+    } else if (appear != *was_visible) {
+        Animation *animation = (Animation *)property_animation_create_bounds_origin(layer, from, to);
+        // animation_set_curve(animation, AnimationCurveLinear);
+        // animation_set_duration(animation, 100);
+        animation_schedule(animation);
+    }
+    *was_visible = appear;
+}
+
+
+/******************************************************************************
+ Compass
+******************************************************************************/
+
+#define COMPASS_CALIB_POLL_RATE_MS (2000)  // how often to check progress while calibrating. Must be < PEEK_TIMEOUT_MS.
+
+static TextLayer* s_layer_status_text;
+
+static void show_status_message(bool show){
+    static bool was_visible = false;
+    animate_scroll((Layer*)s_layer_status_text, show, true, &was_visible);
+}
+
+static void status_text_create(Layer * parent) {
+    GRect parent_bounds = layer_get_bounds(parent);
+    const int16_t background_h = (FONT_H_SMALL * 3) / 2;
+    const int16_t origin_y = PBL_IF_RECT_ELSE(
+        parent_bounds.size.h - background_h,  // bottom of rect
+        (parent_bounds.size.h * 3) / 4        // bit higher for circle
+    );
+    s_layer_status_text = text_layer_create(
+        GRect(0, origin_y, parent_bounds.size.w, background_h)
+    );
+    text_layer_set_text(s_layer_status_text, "");
+    text_layer_set_text_alignment(s_layer_status_text, GTextAlignmentCenter);
+    text_layer_set_font(s_layer_status_text, fonts_get_system_font(FONT_KEY_SMALL));
+    text_layer_set_background_color(s_layer_status_text, PBL_IF_COLOR_ELSE(GColorMayGreen, GColorWhite));
+    text_layer_set_text_color(s_layer_status_text, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+    show_status_message(false);
+}
+
+// return true on success
+static bool compass_service_peek_logged(CompassHeadingData* data) {
+    bool success = true;
+
+    CompassHeadingData localData = {0};
+    if (data == NULL) {
+        data = &localData;
+    }
+
+    (void)compass_service_peek(data);
+    if (data->compass_status != CompassStatusCalibrated) {
+        LOG("COMPASS ERROR: %i", data->compass_status);
+        success = false;
+    }
+    return success;
+}
+
+#if PBL_COMPASS
+static void compass_calibrate_callback(void* context) {
+    CompassHeadingData data = {0};
+    if (compass_service_peek_logged(&data)) {
+        LOG("Compass calibration complete");
+        show_status_message(false);
+    } else {
+        if (data.compass_status == CompassStatusCalibrating) {
+            text_layer_set_text(s_layer_status_text, "keep moving! compass calibrating");
+        }
+        app_timer_register(COMPASS_CALIB_POLL_RATE_MS, compass_calibrate_callback, NULL);
+    }
+}
+
+static void compass_start_calibration(void) {
+    LOG("Starting compass calibration");
+    text_layer_set_text(s_layer_status_text, "move wrist to calibrate compass");
+    show_status_message(true);
+    app_timer_register(COMPASS_CALIB_POLL_RATE_MS, compass_calibrate_callback, NULL);
+}
+#endif  // !PBL_COMPASS
 
 
 /******************************************************************************
@@ -234,35 +348,6 @@ static int16_t num_achievements(void) {
         }
     }
     return count;
-}
-
-/// Animate `layer` to `appear` or disappear by scrolling pixels vertically `from_below` or above.
-/// `was_visible` a pointer to a static bool; will be updated
-static void animate_scroll(Layer *layer, bool appear, bool from_below, bool* was_visible) {
-    const int16_t hide_offset = (from_below ? 1 : -1) * layer_get_bounds(layer).size.h;
-    GPoint hidden_point = GPoint(0, hide_offset);
-    GPoint zero = GPoint(0, 0);
-    GPoint *from = NULL;
-    GPoint *to = NULL;
-    if (appear) {
-        from = &hidden_point;
-        to = &zero;
-    } else {
-        // from wherever it currently is
-        to = &hidden_point;
-    }
-
-    if (s_initialising) {  // start in the correct location
-        GRect bounds = layer_get_bounds(layer);
-        bounds.origin = *to;
-        layer_set_bounds(layer, bounds);
-    } else if (appear != *was_visible) {
-        Animation *animation = (Animation *)property_animation_create_bounds_origin(layer, from, to);
-        // animation_set_curve(animation, AnimationCurveLinear);
-        // animation_set_duration(animation, 100);
-        animation_schedule(animation);
-    }
-    *was_visible = appear;
 }
 
 
@@ -388,34 +473,17 @@ static void draw_trophies(Layer *layer, GContext *ctx){
  Achievement notification
 ******************************************************************************/
 
-static TextLayer *s_layer_notify;
+static TextLayer *s_layer_trophy_notify;
 
-// init s_layer_notify
-static void notify_create(Layer * parent) {
-#if PBL_DISPLAY_WIDTH >= 240
-    const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_24);
-    const int16_t small_text_h = 24;
-#elif PBL_DISPLAY_WIDTH >= 160
-    #if PBL_ROUND
-        const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-        const int16_t small_text_h = 14;
-    #else // PBL_RECT
-        const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
-        const int16_t small_text_h = 18;
-    #endif // PBL_RECT
-#else // PBL_DISPLAY_WIDTH < 160
-    const GFont small_text_font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-    const int16_t small_text_h = 14;
-#endif // PBL_DISPLAY_WIDTH < 160
-
+// init s_layer_trophy_notify
+static void trophy_notify_create(Layer * parent) {
     GRect parent_bounds = layer_get_bounds(parent);
-
-    s_layer_notify = text_layer_create(GRect(0, 30, parent_bounds.size.w, (small_text_h * 5) / 2));
-    text_layer_set_text(s_layer_notify, "");
-    text_layer_set_text_alignment(s_layer_notify, GTextAlignmentCenter);
-    text_layer_set_font(s_layer_notify, small_text_font);
-    text_layer_set_background_color(s_layer_notify, GColorImperialPurple);
-    text_layer_set_text_color(s_layer_notify, GColorWhite);
+    s_layer_trophy_notify = text_layer_create(GRect(0, 30, parent_bounds.size.w, (FONT_H_MED * 5) / 2));
+    text_layer_set_text(s_layer_trophy_notify, "");
+    text_layer_set_text_alignment(s_layer_trophy_notify, GTextAlignmentCenter);
+    text_layer_set_font(s_layer_trophy_notify, fonts_get_system_font(FONT_KEY_MED));
+    text_layer_set_background_color(s_layer_trophy_notify, GColorImperialPurple);
+    text_layer_set_text_color(s_layer_trophy_notify, GColorWhite);
 }
 
 static bool s_notify_showing = false;
@@ -426,13 +494,13 @@ static bool achievement_notify(Achievement achievement) {
 
     switch (achievement) {
     case ACHIEVEMENT_PURE_LUCK:
-        text_layer_set_text(s_layer_notify, "Trophy won: LUCKY DAY\ntime to buy a lottery ticket!");
+        text_layer_set_text(s_layer_trophy_notify, "Trophy won: LUCKY DAY\ntime to buy a lottery ticket!");
         break;
     case ACHIEVEMENT_COMPASS:
-        text_layer_set_text(s_layer_notify, "Trophy won: NORTH STAR\nwho magnetized my arrows?");
+        text_layer_set_text(s_layer_trophy_notify, "Trophy won: NORTH STAR\nwho magnetized my arrows?");
         break;
     case ACHIEVEMENT_UPRIGHT:
-        text_layer_set_text(s_layer_notify, "Trophy won: PERFECT SETUP\njust like a real target");
+        text_layer_set_text(s_layer_trophy_notify, "Trophy won: PERFECT SETUP\njust like a real target");
         break;
     case ACHIEVEMENT_MAX:
         if (s_notify_showing) {
@@ -443,7 +511,7 @@ static bool achievement_notify(Achievement achievement) {
         ASSERT(false);
         break;
     }
-    animate_scroll((Layer*)s_layer_notify, achievement != ACHIEVEMENT_MAX, false, &s_notify_showing);
+    animate_scroll((Layer*)s_layer_trophy_notify, achievement != ACHIEVEMENT_MAX, false, &s_notify_showing);
 
     return dismissed;
 }
@@ -1055,18 +1123,23 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
         arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, shot_reason);
         delay++;
     }
-#else // !SECOND_HAND
+#elif PBL_COMPASS
     if (shot_reason == SHOT_REASON_SHAKE) {
         CompassHeadingData compass = {0};
-        if (compass_service_peek_logged(&compass)) {  // TODO indicate compass not calibrated
+        if (compass_service_peek_logged(&compass)) {
             const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading - DEG_TO_TRIGANGLE(45);
             const int32_t length = ARROW_LENGTH_LONG;
             delay = 0;
             arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, SHOT_REASON_COMPASS);
             delay++;
+        } else if (compass.compass_status == CompassStatusUnavailable) {
+            LOG("ERROR: Compass service unavailable");
+        } else {
+            // TODO shoot a missed arrow across the screen
+            compass_start_calibration();
         }
     }
-#endif // !SECOND_HAND
+#endif // PBL_COMPASS
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
@@ -1131,9 +1204,13 @@ static void main_window_load(Window *window) {
     layer_set_update_proc(s_layer_arrow, arrow_canvas);
     layer_add_child(window_layer, s_layer_arrow);
 
-    // s_layer_notify
-    notify_create(window_layer);
-    layer_add_child(window_layer, (Layer*)s_layer_notify);
+    // s_layer_trophy_notify
+    trophy_notify_create(window_layer);
+    layer_add_child(window_layer, (Layer*)s_layer_trophy_notify);
+
+    // s_layer_status_text
+    status_text_create(window_layer);
+    layer_add_child(window_layer, (Layer*)s_layer_status_text);
 
     tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
     accel_tap_service_subscribe(accel_tap_handler);
@@ -1154,7 +1231,8 @@ static void main_window_unload(Window *window) {
 
     layer_destroy(s_layer_target);
     layer_destroy(s_layer_arrow);
-    text_layer_destroy(s_layer_notify);
+    text_layer_destroy(s_layer_trophy_notify);
+    text_layer_destroy(s_layer_status_text);
 
     tick_timer_service_unsubscribe();
     accel_tap_service_unsubscribe();

@@ -2,8 +2,8 @@
 
 ## 1.3
 
+- Add compass calibration
 - Improve display on small or B&W screens (reduce accelerations, scale arrows, change centre spot colour)
-- Bugfix air resistance calculation for falling arrows
 
 ## 1.2
 
