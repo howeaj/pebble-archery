@@ -749,7 +749,7 @@ static void arrow_hit_effects(ArrowContext* arrow) {
     if (!arrow->hit_effects_started) {
         arrow->hit_effects_started = true;
         // vibe
-        if (arrow->shot_reason != SHOT_REASON_TICK) {
+        if ((arrow->shot_reason != SHOT_REASON_TICK) && (arrow->shot_reason != SHOT_REASON_SPAM)) {
             if ((DEMO && (arrow->distance < 10)) || arrow->achievements != 0) {
                 VIBE(300);
             } else {
@@ -926,7 +926,7 @@ static void arrow_spam_callback(void* context) {
             break;
         case SPAM_STYLE_SPIRAL:
             arrow->angle = DEG_TO_TRIGANGLE(s_spam_countdown * 7);
-            arrow->distance = s_spam_countdown * 2;
+            arrow->distance = (TARGET_RADIUS * s_spam_countdown) / SPAM_COUNDOWN_START;
             break;
         case SPAM_STYLE_RANDOM:
             break;
