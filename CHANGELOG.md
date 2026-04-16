@@ -2,7 +2,8 @@
 
 ## 1.4
 
-- Rain of arrows on success
+- Rain of arrows on trophy success
+- Widen threshold for "NORTH STAR" trophy
 
 ## 1.3
 

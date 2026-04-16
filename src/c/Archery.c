@@ -1044,7 +1044,7 @@ static bool evaluate_achievement_compass(ArrowContext *arrow, int32_t max_distan
     bool success = false;
     const int32_t clockwise_heading = TRIG_MAX_ANGLE - compass->true_heading;
     const int32_t compass_deviation = ABSDIFF_WRAP(arrow->angle, clockwise_heading, DEG_TO_TRIGANGLE(360));
-    const int32_t hit_threshold = TRIG_MAX_ANGLE / MINUTES_PER_HOUR; // within 1 minute either side
+    const int32_t hit_threshold = (5 * TRIG_MAX_ANGLE) / (2 * MINUTES_PER_HOUR); // within 2.5 minutes either side
     const int32_t clue_threshold = DEG_TO_TRIGANGLE(45);  // this is either side, so *2 total degrees
     LOG("clockwise_heading=%d, arrow->angle=%d, compass_deviation=%u",
         TRIGANGLE_TO_DEG(clockwise_heading),
