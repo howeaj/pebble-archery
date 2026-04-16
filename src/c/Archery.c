@@ -1218,8 +1218,8 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
 ******************************************************************************/
 
 STATIC_ASSERT(LAST_ARROW_SHOT == HOUR_ARROW_INDEX);
-// Shoot all arrows, ending with the hour hand
-static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, ShotReason shot_reason) {
+// Shoot all indicator arrows, ending with the hour hand
+static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits units_changed, ShotReason shot_reason) {
     s_state.hour = tick_time->tm_hour % 12;
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
@@ -1270,17 +1270,17 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
     }
 }
 
-static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
+static void reshoot_indicator_arrows(ShotReason shot_reason) {
     // note we don't ever bother reshooting the second hand, since it does it by itself
     const time_t now = time(NULL);
-    shoot_all_arrows(localtime(&now), MINUTE_UNIT | HOUR_UNIT, shot_reason);
+    shoot_indicator_arrows_for_time(localtime(&now), MINUTE_UNIT | HOUR_UNIT, shot_reason);
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     TRACE("tick_handler %d", units_changed);
 #if !DEMO
     if (!s_notify_showing) {
-        shoot_all_arrows(tick_time, units_changed, SHOT_REASON_TICK);
+        shoot_indicator_arrows_for_time(tick_time, units_changed, SHOT_REASON_TICK);
     }
 #endif // !DEMO
 }
@@ -1288,7 +1288,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     TRACE("accel_tap_handler");
     if (!achievement_dismiss() && !arrow_spam_stop()) {
-        reshoot_all_arrows(SHOT_REASON_SHAKE);
+        reshoot_indicator_arrows(SHOT_REASON_SHAKE);
     }
 }
 
@@ -1329,7 +1329,7 @@ static void main_window_load(Window *window) {
     achievements_load();
     (void)achievement_dismiss();
 
-    reshoot_all_arrows(SHOT_REASON_INIT);
+    reshoot_indicator_arrows(SHOT_REASON_INIT);
 
     s_initialising = false;
 }
