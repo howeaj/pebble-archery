@@ -895,8 +895,8 @@ static uint16_t s_spam_countdown = 0;  // 0 for off. 1 for done (so we know to p
 static bool s_spam_index = FIRST_SPAM_ARROW_INDEX;  // the next spam arrow to shoot
 static AppTimer* s_spam_timer = NULL;
 typedef enum SpamStyle {
-    SPAM_STYLE_CENTRE = 0,
-    SPAM_STYLE_RANDOM,
+    SPAM_STYLE_RANDOM = 0,
+    SPAM_STYLE_CENTRE,
     SPAM_STYLE_SPIRAL,
     SPAM_STYLE_MAX  // end-of-enum indicator
 } SpamStyle;
@@ -921,14 +921,16 @@ static void arrow_spam_callback(void* context) {
             SHOT_REASON_SPAM
         );
         switch (s_spam_style) {
+        case SPAM_STYLE_RANDOM:
+#if !DEMO
+            break;
+#endif // !DEMO
         case SPAM_STYLE_CENTRE:
             arrow->distance = 0;
             break;
         case SPAM_STYLE_SPIRAL:
             arrow->angle = DEG_TO_TRIGANGLE(s_spam_countdown * 7);
             arrow->distance = (TARGET_RADIUS * s_spam_countdown) / SPAM_COUNDOWN_START;
-            break;
-        case SPAM_STYLE_RANDOM:
             break;
         default:
             ASSERT(false);
@@ -1073,12 +1075,13 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
     }
 
-#if !DEMO
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
     bool hit_centre = (rand() % 100) == 0;
 #if FORCE_LUCK
-    hit_centre = true;
+    if (arrow->shot_reason != SHOT_REASON_SPAM) {
+        hit_centre = true;
+    }
 #endif // FORCE_LUCK
     if (hit_centre) {
         LOG("PERFECT HIT: RANDOM");
@@ -1113,11 +1116,11 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         max_distance = clue_distance;
     }
 
-#else // DEMO
+#if DEMO
+    min_distance = 10;
     if (!is_hour_hand(arrow)){
         max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
     }
-    int32_t min_distance = 10;
 #endif // DEMO
 
     arrow->distance = min_distance + (rand() % (max_distance - min_distance));
