@@ -1,23 +1,13 @@
 // Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
 
 /* TODO
-    indicate where north is after achievement fail
-
-    condition complete celebration effects
-        arrow spam
     fix trophy location on time 2
     save last arrow conditions to pull at next init
-
 
     low battery indicator: slow wobbly arrow
 
     conditions
-        pure luck (1/10,000)
-        align compass with each arrow
-            (extra: when arrows aren't close together)
-        keep it still and upright and point north
         align "up" with each arrow
-            (extra: when arrows aren't close together)
         robin hood
 
     leave holes behind?
@@ -26,9 +16,10 @@
         hanger
         bouncer
         pass-through
-    screen shake on hit?
+    target shake on hit?
 
     shake too hard -> target falls off
+    extra achievement when arrows are far apart?
     collision between shots and falling arrows (difficult)
 
     digital display as scoreboard
@@ -45,9 +36,14 @@
 
 #include <pebble.h>
 
+// debug options
 #define DEMO false
 #define DEBUG false
 #define SECOND_HAND false
+#define DISABLE_VIBE false
+#define FORCE_COMPASS (DEMO || false)  // fake compass calibrated
+#define FORCE_LUCK false  // always hit centre
+
 #include "Macros.h"
 
 static Window *s_window;
@@ -109,15 +105,19 @@ State s_state;
 ******************************************************************************/
 
 // Single vibe for duration
-#define VIBE(duration) MACRO_START \
-    LOG("VIBE %u", (duration)); \
-    static const uint32_t VIBE_segments[] = {(duration)}; \
-    VibePattern VIBE_pat = { \
-        .durations = VIBE_segments, \
-        .num_segments = ARRAY_LENGTH(VIBE_segments), \
-    }; \
-    vibes_enqueue_custom_pattern(VIBE_pat); \
-MACRO_END
+#if DISABLE_VIBE
+    #define VIBE(duration) (void)duration
+#else // !DISABLE_VIBE
+    #define VIBE(duration) MACRO_START \
+        LOG("VIBE %u", (duration)); \
+        static const uint32_t VIBE_segments[] = {(duration)}; \
+        VibePattern VIBE_pat = { \
+            .durations = VIBE_segments, \
+            .num_segments = ARRAY_LENGTH(VIBE_segments), \
+        }; \
+        vibes_enqueue_custom_pattern(VIBE_pat); \
+    MACRO_END
+#endif // !DISABLE_VIBE
 
 /// Fill a circle with color
 static inline void graphics_color_circle(GContext* ctx, GPoint p, uint16_t radius, GColor color){
@@ -241,7 +241,7 @@ static bool compass_service_peek_logged(CompassHeadingData* data) {
     }
 
     (void)compass_service_peek(data);
-    if (data->compass_status != CompassStatusCalibrated) {
+    if (!FORCE_COMPASS && (data->compass_status != CompassStatusCalibrated)) {
         LOG("COMPASS ERROR: %i", data->compass_status);
         success = false;
     }
@@ -250,6 +250,7 @@ static bool compass_service_peek_logged(CompassHeadingData* data) {
 
 #if PBL_COMPASS
 static void compass_calibrate_callback(void* context) {
+    // TODO detect lack of movement and abort calibration to save power
     CompassHeadingData data = {0};
     if (compass_service_peek_logged(&data)) {
         LOG("Compass calibration complete");
@@ -520,6 +521,28 @@ static inline bool achievement_dismiss(void) {
     return achievement_notify(ACHIEVEMENT_MAX);
 }
 
+static void vibe_celebration(void) {
+    static const uint32_t segments[] = {
+        // final fantasy victory theme; 100BPM, 1 quarter beat = 150ms
+        75, 75,
+        75, 75,
+        75, 75,
+        75*5, 75,  // 3
+        75*5, 75,  // 3
+        75*5, 75,  // 3
+        75, 75*3,  // 2
+        75, 75,
+        75*6       // 3
+    };
+    VibePattern pat = {
+        .durations = segments,
+        .num_segments = ARRAY_LENGTH(segments),
+    };
+    vibes_enqueue_custom_pattern(pat);
+}
+
+static void arrow_spam_start(void);  // TODO move
+
 static void achievement_complete(Achievement achievement) {
     LOG("ACHIEVEMENT COMPLETE: %u", achievement);
     if (!achievement_in(s_achievements, achievement)) {
@@ -528,26 +551,9 @@ static void achievement_complete(Achievement achievement) {
         achievement_notify(achievement);
         achievement_add(&s_achievements, achievement);
         achievements_save();
-
-        // vibes for victory TODO move this
-        static const uint32_t segments[] = {
-            // final fantasy victory theme; 100BPM, 1 quarter beat = 150ms
-            75, 75,
-            75, 75,
-            75, 75,
-            75*5, 75,  // 3
-            75*5, 75,  // 3
-            75*5, 75,  // 3
-            75, 75*3,  // 2
-            75, 75,
-            75*6       // 3
-        };
-        VibePattern pat = {
-            .durations = segments,
-            .num_segments = ARRAY_LENGTH(segments),
-        };
-        vibes_enqueue_custom_pattern(pat);
+        vibe_celebration();
     }
+    arrow_spam_start();
 }
 
 
@@ -561,7 +567,8 @@ typedef enum ShotReason {
     SHOT_REASON_TICK = 0,
     SHOT_REASON_INIT,
     SHOT_REASON_SHAKE,
-    SHOT_REASON_COMPASS
+    SHOT_REASON_COMPASS,
+    SHOT_REASON_SPAM
 } ShotReason;
 
 static inline bool shot_reason_is_manual(ShotReason shot_reason) {
@@ -592,8 +599,8 @@ typedef struct ArrowContext {
     Achievements achievements;  // achievements for which this arrow has met the conditions
 } ArrowContext;
 
-#define MAX_ARROWS (3)
-#define ARROW_NUM_FRAMES (4)
+#define MAX_ARROWS (15)
+#define ARROW_NUM_FRAMES (4)  // number of frames in the arrow shoot animation
 #define GColorWood GColorWindsorTan
 #define ARROW_DISTANCE_UNINITIALISED (-1)
 #define ARROW_LENGTH_LONG ((TARGET_RADIUS * 7) / 10)
@@ -604,8 +611,10 @@ static ArrowContext s_arrows[MAX_ARROWS];
 #define HOUR_ARROW_INDEX    (0)
 #define MINUTE_ARROW_INDEX  (1)
 #define SECOND_ARROW_INDEX  (2)
+#define COMPASS_ARROW_INDEX (3)
+#define FIRST_SPAM_ARROW_INDEX (2)  // the remaining arrows < MAX_ARROWS are used for arrow spam
 
-#define LAST_ARROW_SHOT HOUR_ARROW_INDEX  // the last arrow to be shot on each round
+#define LAST_ARROW_SHOT HOUR_ARROW_INDEX  // the last arrow to be shot on each regular round
 
 
 static ArrowContext s_arrows_falling[MAX_ARROWS];
@@ -617,35 +626,39 @@ static inline bool is_hour_hand(const ArrowContext* arrow) {
     return arrow - s_arrows == 0;
 }
 
-static void check_achievement_completion(void) {
+static inline bool arrow_spam_is_shooting(void);  // TODO move
+
+// triggering_arrow is the arrow whose shot completion triggered this check
+static void check_achievement_completion(ArrowContext* triggering_arrow) {
     const size_t num_relevant_arrows = 2;  // Only the hour and second hand, which are always in the first 2 slots.
     int16_t success_count[ACHIEVEMENT_MAX] = {0};
 
     // count per-arrow achievement conditions
-    for (size_t i = 0; i < num_relevant_arrows; i++) {
-        ArrowContext* const arrow = &s_arrows[i];
-        if (arrow->frame) {
-            for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
-                if (shot_reason_is_manual(arrow->shot_reason) || (ach == ACHIEVEMENT_PURE_LUCK)) {
-                    if (achievement_in(arrow->achievements, ach)) {
-                        success_count[ach] += 1;
+    if (triggering_arrow->shot_reason != SHOT_REASON_COMPASS) {
+        for (size_t i = 0; i < num_relevant_arrows; i++) {
+            ArrowContext* const arrow = &s_arrows[i];
+            if (arrow->frame) {
+                for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
+                    if (shot_reason_is_manual(arrow->shot_reason) || (ach == ACHIEVEMENT_PURE_LUCK)) {
+                        if (achievement_in(arrow->achievements, ach)) {
+                            success_count[ach] += 1;
+                        }
                     }
                 }
             }
         }
-    }
 
-    // conditions must be attained on all relevant arrows to complete the achievement
-    for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
-        if (success_count[ach] == num_relevant_arrows) {
-            achievement_complete(ach);
-        } else if (success_count[ach] == (num_relevant_arrows - 1)) {
-            if (s_arrows[0].frame && s_arrows[1].frame) {  // TODO implement properly
-                LOG("SO CLOSE %u", ach);
+        // conditions must be attained on all relevant arrows to complete the achievement
+        for (Achievement ach = (Achievement)0; ach < ACHIEVEMENT_MAX; ach++) {
+            if (success_count[ach] == num_relevant_arrows) {
+                achievement_complete(ach);
+            } else if (success_count[ach] == (num_relevant_arrows - 1)) {
+                if (s_arrows[0].frame && s_arrows[1].frame) {  // TODO implement properly
+                    LOG("SO CLOSE %u", ach);
+                }
             }
         }
     }
-
 }
 
 // Return the tip location of the arrow relative to `layer`
@@ -656,18 +669,25 @@ static GPoint arrow_tip(const Layer* layer, const ArrowContext* arrow) {
     return (GPoint){loc.x + arrow->offset_pos.x, loc.y + arrow->offset_pos.y};
 }
 
+// Return true if the given arrow should attempt to be drawn by the next arrow_canvas()
+static inline bool arrow_should_draw(const ArrowContext* arrow) {
+    return arrow->frame > 0;
+}
+
 // Draw the arrow. Return true if it was on-screen.
 static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg, bool point) {
 
     // 3 degrees is required to visibly wobble when the arrow is straight vertical/horizontal
-    const int32_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
-    const bool is_straight = (
-        MIN(ABSDIFF(angle_deg_wrap_90, 0),
-            ABSDIFF(angle_deg_wrap_90, 90)
-        ) < ((360 / 60) / 2)
-    );
-    if (is_straight) {
-        wobble_deg = wobble_deg * 3;
+    if (wobble_deg != 0) {
+        const int32_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
+        const bool is_straight = (
+            MIN(ABSDIFF(angle_deg_wrap_90, 0),
+                ABSDIFF(angle_deg_wrap_90, 90)
+            ) < ((360 / 60) / 2)
+        );
+        if (is_straight) {
+            wobble_deg = wobble_deg * 3;
+        }
     }
 
     const int32_t shaft_angle = arrow->angle + arrow->offset_angle + DEG_TO_TRIGANGLE(wobble_deg);
@@ -776,12 +796,16 @@ static void arrow_nextframe(void* context) {
     ArrowContext* arrow = (ArrowContext*)context;
     arrow->frame ++;
     if (arrow->frame < ARROW_NUM_FRAMES) {
+        // extra delay on shake to complete achievement conditions
         const uint32_t delay_between_arrows = (arrow->shot_reason == SHOT_REASON_SHAKE) ? 800 : 300;
-        arrow->timer = app_timer_register((arrow->frame < 1) ? delay_between_arrows : 50, &arrow_nextframe, arrow);
+        arrow->timer = app_timer_register(arrow_should_draw(arrow) ? 50 : delay_between_arrows,
+                                          &arrow_nextframe, arrow);
         ASSERT(arrow->timer != NULL);
     } else {  // shot animation complete
         arrow->timer = NULL;
-        check_achievement_completion();
+        if (arrow->shot_reason != SHOT_REASON_SPAM) {
+            check_achievement_completion(arrow);
+        }
     }
     layer_mark_dirty(s_layer_arrow);
 }
@@ -797,15 +821,19 @@ static void arrow_pull(ArrowContext* original_arrow) {
         original_arrow->timer = NULL;
     }
 
-    // move the arrow from s_arrows to s_arrows_falling
-    s_arrows_falling[s_arrows_falling_index] = *original_arrow;
-    ArrowContext *arrow = &s_arrows_falling[s_arrows_falling_index];
-    s_arrows_falling_index = (s_arrows_falling_index + 1) % MAX_ARROWS;
-    original_arrow->frame = 0;
+    if (arrow_should_draw(original_arrow)){
+        // move the arrow from s_arrows to s_arrows_falling
+        s_arrows_falling[s_arrows_falling_index] = *original_arrow;
+        ArrowContext *arrow = &s_arrows_falling[s_arrows_falling_index];
+        s_arrows_falling_index = (s_arrows_falling_index + 1) % MAX_ARROWS;
+        original_arrow->frame = 0;  // mark as don't draw
 
-    // pull out in the direction of the arrow
-    // note this velocity should be at least the length of the arrowpoint
-    arrow->velocity = point_from_angle(GPointZero, arrow->angle, (PBL_DISPLAY_WIDTH < 200) ? 6 : 10);
+        // pull out in the direction of the arrow
+        // note this velocity should be at least the length of the arrowpoint
+        arrow->velocity = point_from_angle(GPointZero, arrow->angle, (PBL_DISPLAY_WIDTH < 200) ? 6 : 10);
+
+        layer_mark_dirty(s_layer_arrow);
+    }
 }
 
 // Start a new arrow shoot sequence
@@ -859,6 +887,85 @@ static void demo_override_arrow_hits(ArrowContext* arrow) {
 }
 #endif // DEMO
 
+
+// Arrowspam celebration;
+// Quickly shoot random arrows until the countdown ends or arrow_spam_stop() is called.
+#define SPAM_COUNDOWN_START (50)  // i.e. num_arrows_to_spam - 2
+static uint16_t s_spam_countdown = 0;  // 0 for off. 1 for done (so we know to pull them). >1 in progress.
+static bool s_spam_index = FIRST_SPAM_ARROW_INDEX;  // the next spam arrow to shoot
+static AppTimer* s_spam_timer = NULL;
+typedef enum SpamStyle {
+    SPAM_STYLE_CENTRE = 0,
+    SPAM_STYLE_RANDOM,
+    SPAM_STYLE_SPIRAL,
+    SPAM_STYLE_MAX  // end-of-enum indicator
+} SpamStyle;
+static SpamStyle s_spam_style = SPAM_STYLE_MAX;
+static inline bool arrow_spam_is_shooting(void) {
+    return s_spam_countdown > 1;
+}
+static void arrow_spam_callback(void* context) {
+    if (s_spam_countdown > 1) {
+        const int16_t arrow_index = (
+            FIRST_SPAM_ARROW_INDEX + (
+                (SPAM_COUNDOWN_START - s_spam_countdown)
+                % (MAX_ARROWS - FIRST_SPAM_ARROW_INDEX)
+            )
+        );
+        ArrowContext* arrow = &s_arrows[arrow_index];
+        arrow_shoot(
+            arrow,
+            rand() % TRIG_MAX_ANGLE,
+            (rand() % ARROW_LENGTH_LONG) + (ARROW_LENGTH_SHORT/2),
+            0,
+            SHOT_REASON_SPAM
+        );
+        switch (s_spam_style) {
+        case SPAM_STYLE_CENTRE:
+            arrow->distance = 0;
+            break;
+        case SPAM_STYLE_SPIRAL:
+            arrow->angle = DEG_TO_TRIGANGLE(s_spam_countdown * 7);
+            arrow->distance = s_spam_countdown * 2;
+            break;
+        case SPAM_STYLE_RANDOM:
+            break;
+        default:
+            ASSERT(false);
+            break;
+        }
+        s_spam_countdown --;
+        s_spam_timer = app_timer_register(300, arrow_spam_callback, NULL);
+    }
+}
+// Return true if stopped an ongoing spam
+static bool arrow_spam_stop(void) {
+    if (s_spam_countdown >= 1) {
+        LOG("arrow_spam_stopped");
+        s_spam_countdown = 0;
+        if (s_spam_timer != NULL) {
+            app_timer_cancel(s_spam_timer);
+            s_spam_timer = NULL;
+        }
+        for (size_t i = FIRST_SPAM_ARROW_INDEX; i < MAX_ARROWS; i++) {
+            arrow_pull(&s_arrows[i]);
+        }
+        s_spam_style = (SpamStyle)(((uint8_t)s_spam_style + 1) % (uint8_t)SPAM_STYLE_MAX);  // cycle through styles
+        return true;
+    }
+    return false;
+}
+static void arrow_spam_start(void) {
+    TRACE("arrow_spam_start");
+    ASSERT(s_spam_timer == NULL);
+    if (s_spam_style == SPAM_STYLE_MAX) {  // start with random style
+        s_spam_style = (SpamStyle)(rand() % (int)SPAM_STYLE_MAX);
+    }
+    s_spam_index = FIRST_SPAM_ARROW_INDEX;
+    s_spam_countdown = SPAM_COUNDOWN_START;
+    arrow_spam_callback(NULL);
+}
+
 // ACHIEVEMENT_UPRIGHT: Keep it still and upright (slight tilt back) like a real target
 static int32_t evaluate_achievement_upright(ArrowContext *arrow, int32_t max_distance, int32_t* clue_distance,
                                             const AccelData *accel) {
@@ -896,8 +1003,8 @@ static int32_t evaluate_achievement_upright(ArrowContext *arrow, int32_t max_dis
     const int16_t deviation_z = MAX(0, ABSDIFF(accel->z, ideal_z) - threshold_z - ACCEL_NOISE_MAX);
 
     const int32_t total_deviation = deviation_x + deviation_y + deviation_z + deviation_yz;
-    LOG("x=%d, y=%d, z=%d, tot=%d, devX=%d, devY=%d, devZ=%d, devYZ=%d",
-        accel->x, accel->y, accel->z, total_deviation, deviation_x, deviation_y, deviation_z, deviation_yz);
+    // LOG("x=%d, y=%d, z=%d, tot=%d, devX=%d, devY=%d, devZ=%d, devYZ=%d",
+    //     accel->x, accel->y, accel->z, total_deviation, deviation_x, deviation_y, deviation_z, deviation_yz);
     const bool is_upright = (total_deviation == 0);
 
     static AccelData accel_other = {0};
@@ -909,7 +1016,7 @@ static int32_t evaluate_achievement_upright(ArrowContext *arrow, int32_t max_dis
             MAX(ABSDIFF(accel->y, accel_other.y),
                 ABSDIFF(accel->z, accel_other.z))
         ) < ACCEL_NOISE_MAX;
-        LOG("is_still=%s", BOOL_TO_STR(is_still));
+        // LOG("is_still=%s", BOOL_TO_STR(is_still));
 
         success = is_upright && is_still;
     } else {
@@ -970,6 +1077,9 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     // Normally, you get a fixed small chance to hit the centre.
     // Chosen to get both arrows in centre on average weekly when shooting once per minute.
     bool hit_centre = (rand() % 100) == 0;
+#if FORCE_LUCK
+    hit_centre = true;
+#endif // FORCE_LUCK
     if (hit_centre) {
         LOG("PERFECT HIT: RANDOM");
         achievement_add(&arrow->achievements, ACHIEVEMENT_PURE_LUCK);
@@ -1011,10 +1121,10 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
 #endif // DEMO
 
     arrow->distance = min_distance + (rand() % (max_distance - min_distance));
-    LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
+    // LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
 
 #if DEMO
-    if (arrow->shot_reason != SHOT_REASON_COMPASS) {
+    if ((arrow->shot_reason != SHOT_REASON_COMPASS) && (arrow->shot_reason != SHOT_REASON_SPAM)) {
         demo_override_arrow_hits(arrow);
     }
 #endif // DEMO
@@ -1023,7 +1133,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
 static void animate_shots(Layer* layer, GContext* ctx) {
     for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
         ArrowContext* const arrow = &s_arrows[i];
-        if (arrow->frame > 0) {
+        if (arrow_should_draw(arrow)) {
             switch(arrow->frame) {
             case 1:
                 if (arrow->distance == ARROW_DISTANCE_UNINITIALISED) {
@@ -1058,7 +1168,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
     bool any_still_falling = false;
     for (size_t i = 0; i < MAX_ARROWS; i++) {  // TODO sort by distance
         ArrowContext* const arrow = &s_arrows_falling[i];
-        if (arrow->frame) {
+        if (arrow_should_draw(arrow)) {
             // location
             arrow->offset_pos.x += arrow->velocity.x;
             arrow->offset_pos.y += arrow->velocity.y;
@@ -1119,18 +1229,21 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
 #if SECOND_HAND
     if (units_changed & SECOND_UNIT) {
         const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
-        const int32_t length = ARROW_LENGTH_LONG;
-        arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, shot_reason);
+        arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, shot_reason);
         delay++;
     }
-#elif PBL_COMPASS
+#endif // SECOND_HAND
+#if PBL_COMPASS
     if (shot_reason == SHOT_REASON_SHAKE) {
         CompassHeadingData compass = {0};
         if (compass_service_peek_logged(&compass)) {
-            const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading - DEG_TO_TRIGANGLE(45);
-            const int32_t length = ARROW_LENGTH_LONG;
+            #if DEMO
+                const int32_t angle = DEG_TO_TRIGANGLE(-45);
+            #else // !DEMO
+                const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading;
+            #endif // !DEMO
             delay = 0;
-            arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, length, delay, SHOT_REASON_COMPASS);
+            arrow_shoot(&s_arrows[COMPASS_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, SHOT_REASON_COMPASS);
             delay++;
         } else if (compass.compass_status == CompassStatusUnavailable) {
             LOG("ERROR: Compass service unavailable");
@@ -1143,8 +1256,7 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
-        const int32_t length = ARROW_LENGTH_LONG;
-        arrow_shoot(&s_arrows[MINUTE_ARROW_INDEX], angle, length, delay, shot_reason);
+        arrow_shoot(&s_arrows[MINUTE_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, shot_reason);
         delay++;
 
         { // hours
@@ -1152,11 +1264,16 @@ static void shoot_all_arrows(struct tm *tick_time, TimeUnits units_changed, Shot
                 ((s_state.hour * MINUTES_PER_HOUR) + s_state.min)
                 * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
             );
-            const int32_t length = ARROW_LENGTH_SHORT;
-            arrow_shoot(&s_arrows[HOUR_ARROW_INDEX], angle, length, delay, shot_reason);
+            arrow_shoot(&s_arrows[HOUR_ARROW_INDEX], angle, ARROW_LENGTH_SHORT, delay, shot_reason);
             delay++;
         }
     }
+}
+
+static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
+    // note we don't ever bother reshooting the second hand, since it does it by itself
+    const time_t now = time(NULL);
+    shoot_all_arrows(localtime(&now), MINUTE_UNIT | HOUR_UNIT, shot_reason);
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
@@ -1168,15 +1285,9 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 #endif // !DEMO
 }
 
-static void reshoot_all_arrows(ShotReason shot_reason) {  // TODO rename
-    // note we don't ever bother reshooting the second hand, since it does it by itself
-    const time_t now = time(NULL);
-    shoot_all_arrows(localtime(&now), MINUTE_UNIT | HOUR_UNIT, shot_reason);
-}
-
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     TRACE("accel_tap_handler");
-    if (!achievement_dismiss()) {
+    if (!achievement_dismiss() && !arrow_spam_stop()) {
         reshoot_all_arrows(SHOT_REASON_SHAKE);
     }
 }

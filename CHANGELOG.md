@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4
+
+- Rain of arrows on success
+
 ## 1.3
 
 - Add compass calibration
