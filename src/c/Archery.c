@@ -10,6 +10,10 @@
         align "up" with each arrow
         robin hood
 
+    accelerometer mode (intsead of compass)
+        - shoot arrow in the direction of the shake
+        - try to hit another arrow, I guess
+
     leave holes behind?
     special animation for robin hoods
     random animation for
@@ -101,6 +105,7 @@ State s_state;
 
 #define FRAMERATE (30)
 #define MS_PER_FRAME (MS_PER_S / FRAMERATE)
+#define MS_PER_ARROW_SHOOT_FRAME (50)
 
 
 /******************************************************************************
@@ -381,16 +386,21 @@ static void draw_clock_indices(const GRect* bounds, GContext *ctx) {
     }
 }
 
-static void finish_load(void);  // TODO move
-static int16_t s_target_intro_frame = 0;
+static int16_t s_target_ripple_frame = -1;
 static void target_nextframe(void* context) {
-    if (s_target_intro_frame == -1){
-        finish_load();
-    } else {
-        s_target_intro_frame ++;
+    if (s_target_ripple_frame >= 0){
+        s_target_ripple_frame ++;
         app_timer_register(MS_PER_FRAME, target_nextframe, NULL);
     }
     layer_mark_dirty(s_layer_target);
+}
+static void target_start_ripple(uint32_t delay_ms) {
+    s_target_ripple_frame = 0;
+    if (delay_ms) {
+        app_timer_register(delay_ms, target_nextframe, NULL);
+    } else {
+        target_nextframe(NULL);
+    }
 }
 static void draw_target(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
@@ -399,7 +409,7 @@ static void draw_target(Layer *layer, GContext *ctx) {
     const int16_t final_ring_width = TARGET_RADIUS / TARGET_NUM_RINGS;
 
     graphics_color_rect(ctx, bounds, 0, GCornerNone, GColorMayGreen);
-#if !PBL_CHALK
+#if !PBL_CHALK  // TODO put shadow back in
     // grass with drop-shadow
     // const uint16_t final_target_radius = TARGET_NUM_RINGS * ring_width;
     // const uint16_t offset = final_target_radius / 40;
@@ -425,23 +435,25 @@ static void draw_target(Layer *layer, GContext *ctx) {
 #endif // PBL_BW
     };
     #define MAXVEL MUL_FRACT(final_ring_width, 3, 5)
-    // static int16_t ring_velocity[TARGET_NUM_RINGS] = {MAXVEL, MAXVEL-1, MAXVEL-2, MAXVEL-3, MAXVEL-4};
+    // TODO now its just a simple ripple, this can probably be simplified
     static int16_t ring_velocity[TARGET_NUM_RINGS] = {MAXVEL, MAXVEL, MAXVEL, MAXVEL, MAXVEL};
-    static int16_t ring_size[TARGET_NUM_RINGS] = {INT16_MAX};
-    if (ring_size[0] == INT16_MAX) {
-        // initialize ring size to an even number of frames away from max
-        // so they all reach the same distance beyond the max
+    static int16_t ring_size[TARGET_NUM_RINGS] = {0};
+    if (s_target_ripple_frame == 1) {
+        // starting ring size
         for (int16_t i = 0; i < TARGET_NUM_RINGS; i++) {
             const int16_t final_radius = (TARGET_NUM_RINGS - i) * final_ring_width;
-            ring_size[i] = ((final_radius + (final_ring_width / 4)) % ring_velocity[i]);
+            ring_size[i] = final_radius + 1 - (ring_velocity[i]);
+            ring_velocity[i] = MAXVEL;
         }
     };
     int16_t num_done = 0;
     for (int16_t i = 0; i < TARGET_NUM_RINGS; i++) {
-        const int16_t ring_start_frame = i * 3;
+        const int16_t ring_start_frame = (TARGET_NUM_RINGS - i);
         const int16_t final_radius = (TARGET_NUM_RINGS - i) * final_ring_width;
 
-        if ((s_target_intro_frame == -1) || (s_target_intro_frame >= ring_start_frame)) {
+        if (s_target_ripple_frame < ring_start_frame) {
+            graphics_color_circle(ctx, center, final_radius, colors[i]);
+        } else {
             if (ring_size[i] < final_radius) {
                 // initial growing phase
                 ring_size[i] += ring_velocity[i];
@@ -461,29 +473,15 @@ static void draw_target(Layer *layer, GContext *ctx) {
             graphics_color_circle(ctx, center, ring_size[i], colors[i]);
         }
     }
-    if ((num_done >= TARGET_NUM_RINGS) && (s_target_intro_frame != -1)) {
-        LOG("Finished target intro at frame #%d (%dms)", s_target_intro_frame, s_target_intro_frame * MS_PER_FRAME);
-        s_target_intro_frame = -1;
+    if ((num_done >= TARGET_NUM_RINGS) && (s_target_ripple_frame != -1)) {
+        LOG("Ripple end frame #%d (%dms)", s_target_ripple_frame, s_target_ripple_frame * MS_PER_FRAME);
+        s_target_ripple_frame = -1;
     }
 
-    // for (size_t i = 0; i < TARGET_NUM_RINGS; i++) {
-    //     const size_t j = (TARGET_NUM_RINGS - i);
-    //     const size_t ring_start_frame = MUL_FRACT((j + 1), TARGET_INTRO_COUNTDOWN_START, TARGET_NUM_RINGS);
-    //     const uint16_t final_radius = j * ring_width;
-    //     const uint16_t largest_radius = final_radius + (final_ring_width / 2);
-    //     const size_t ring_largest_radius_time = ring_start_frame - (TARGET_INTRO_COUNTDOWN_START / 5);
-    //     if (s_target_intro_countdown < ring_start_frame) {
-    //         graphics_color_circle(ctx, center, MUL_FRACT(j * ring_width, ring_start_frame - s_target_intro_countdown, ring_start_frame), colors[i]);
-    //     }
-    // }
-    // if (s_target_intro_frame == -1)
-    {
-        // 10spot
-        // graphics_color_circle(ctx, center, final_ring_width, PBL_IF_COLOR_ELSE(GColorYellow, GColorLightGray));
-        graphics_color_circle(ctx, center, final_ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorLightGray));
-    }
+    // 10spot
+    graphics_color_circle(ctx, center, final_ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorLightGray));
 
-    if (s_target_intro_frame == -1) {
+    if (s_target_ripple_frame == -1) {
         draw_clock_indices(&bounds, ctx);
     }
 }
@@ -875,7 +873,7 @@ static void arrow_nextframe(void* context) {
     if (arrow->frame < ARROW_NUM_FRAMES) {
         // extra delay on shake to complete achievement conditions
         const uint32_t delay_between_arrows = (arrow->shot_reason == SHOT_REASON_SHAKE) ? 800 : 300;
-        arrow->timer = app_timer_register(arrow_should_draw(arrow) ? 50 : delay_between_arrows,
+        arrow->timer = app_timer_register(arrow_should_draw(arrow) ? MS_PER_ARROW_SHOOT_FRAME : delay_between_arrows,
                                           &arrow_nextframe, arrow);
         ASSERT(arrow->timer != NULL);
     } else {  // shot animation complete
@@ -1296,6 +1294,27 @@ static void arrow_canvas(Layer* layer, GContext* ctx) {
 /******************************************************************************
  Handlers
 ******************************************************************************/
+#if PBL_COMPASS
+static bool shoot_compass_arrow(void) {
+    bool shot = false;
+    CompassHeadingData compass = {0};
+    if (compass_service_peek_logged(&compass)) {
+        #if DEMO
+            const int32_t angle = DEG_TO_TRIGANGLE(-45);
+        #else // !DEMO
+            const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading;
+        #endif // !DEMO
+        arrow_shoot(&s_arrows[COMPASS_ARROW_INDEX], angle, ARROW_LENGTH_LONG, 0, SHOT_REASON_COMPASS);
+        shot = true;
+    } else if (compass.compass_status == CompassStatusUnavailable) {
+        LOG("ERROR: Compass service unavailable");
+    } else {
+        // TODO shoot a missed arrow across the screen
+        compass_start_calibration();
+    }
+    return shot;
+}
+#endif // PBL_COMPASS
 
 STATIC_ASSERT(LAST_ARROW_SHOT == HOUR_ARROW_INDEX);
 // Shoot all indicator arrows, ending with the hour hand
@@ -1304,7 +1323,8 @@ static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits unit
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
 
-    int16_t delay = (shot_reason == SHOT_REASON_INIT) ? 0 : 1;
+    // How many MS_PER_ARROW_SHOOT_FRAMES to delay after pulling the arrow
+    int16_t delay = 1;
 
 #if SECOND_HAND
     if (units_changed & SECOND_UNIT) {
@@ -1313,26 +1333,6 @@ static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits unit
         delay++;
     }
 #endif // SECOND_HAND
-#if PBL_COMPASS
-    if (shot_reason == SHOT_REASON_SHAKE) {
-        CompassHeadingData compass = {0};
-        if (compass_service_peek_logged(&compass)) {
-            #if DEMO
-                const int32_t angle = DEG_TO_TRIGANGLE(-45);
-            #else // !DEMO
-                const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading;
-            #endif // !DEMO
-            delay = 0;
-            arrow_shoot(&s_arrows[COMPASS_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, SHOT_REASON_COMPASS);
-            delay++;
-        } else if (compass.compass_status == CompassStatusUnavailable) {
-            LOG("ERROR: Compass service unavailable");
-        } else {
-            // TODO shoot a missed arrow across the screen
-            compass_start_calibration();
-        }
-    }
-#endif // PBL_COMPASS
 
     if (units_changed & MINUTE_UNIT) {
         const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
@@ -1350,17 +1350,52 @@ static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits unit
     }
 }
 
-static void reshoot_indicator_arrows(ShotReason shot_reason) {
-    // note we don't ever bother reshooting the second hand, since it does it by itself
-    const time_t now = time(NULL);
-    shoot_indicator_arrows_for_time(localtime(&now), MINUTE_UNIT | HOUR_UNIT, shot_reason);
+typedef struct ShootTimeContext {
+    struct tm tick_time;
+    TimeUnits units_changed;
+    ShotReason shot_reason;
+} ShootTimeContext;
+ShootTimeContext s_shoot_time_context = {0};
+
+static void shoot_indicator_arrows_for_time_handler(void* context) {
+    ShootTimeContext* args = (ShootTimeContext*)context;
+    shoot_indicator_arrows_for_time(&args->tick_time, args->units_changed, args->shot_reason);
+}
+
+// Start the main shooting sequence
+static void start_shoot_sequence(struct tm *tick_time, TimeUnits units_changed, ShotReason shot_reason) {
+    if (tick_time == NULL) {
+        const time_t now = time(NULL);
+        tick_time = localtime(&now);
+    }
+
+    uint32_t delay_ms = 0;
+
+    // compass arrow hits
+#if PBL_COMPASS
+    if (shot_reason == SHOT_REASON_SHAKE) {
+        if (shoot_compass_arrow()) {
+            delay_ms += MS_PER_ARROW_SHOOT_FRAME; // arrow hits on second frame
+        }
+    }
+#endif // PBL_COMPASS
+
+    // which causes a ripple
+    target_start_ripple(delay_ms);
+
+    // which causes the other arrows to fall out & reshoot
+    // TODO pull specific arrows exactly when the ripple reaches each scoreband
+    s_shoot_time_context.tick_time = *tick_time;
+    s_shoot_time_context.units_changed = units_changed;
+    s_shoot_time_context.shot_reason = shot_reason;
+    app_timer_register(delay_ms, shoot_indicator_arrows_for_time_handler, &s_shoot_time_context);
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     TRACE("tick_handler %d", units_changed);
 #if !DEMO
     if (!s_notify_showing) {
-        shoot_indicator_arrows_for_time(tick_time, units_changed, SHOT_REASON_TICK);
+        start_shoot_sequence(tick_time, units_changed, SHOT_REASON_TICK);
     }
 #endif // !DEMO
 }
@@ -1368,7 +1403,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     TRACE("accel_tap_handler");
     if (!achievement_dismiss() && !arrow_spam_stop()) {
-        reshoot_indicator_arrows(SHOT_REASON_SHAKE);
+        start_shoot_sequence(NULL, MINUTE_UNIT | HOUR_UNIT, SHOT_REASON_SHAKE);
     }
 }
 
@@ -1403,19 +1438,14 @@ static void main_window_load(Window *window) {
     status_text_create(window_layer);
     layer_add_child(window_layer, (Layer*)s_layer_status_text);
 
-    target_nextframe(NULL);
-
     achievements_load();
     (void)achievement_dismiss();
 
-    s_initialising = false;
-}
-
-// Called after the intro animation finishes
-static void finish_load(void) {
     tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
     accel_tap_service_subscribe(accel_tap_handler);
-    reshoot_indicator_arrows(SHOT_REASON_INIT);
+    start_shoot_sequence(NULL, MINUTE_UNIT | HOUR_UNIT, SHOT_REASON_INIT);
+
+    s_initialising = false;
 }
 
 static void main_window_unload(Window *window) {
