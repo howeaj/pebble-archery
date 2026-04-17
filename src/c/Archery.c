@@ -99,6 +99,9 @@ State s_state;
     #define FONT_H_SMALL (9)
 #endif // PBL_DISPLAY_WIDTH < 160
 
+#define FRAMERATE (30)
+#define MS_PER_FRAME (MS_PER_S / FRAMERATE)
+
 
 /******************************************************************************
  Generic functions
@@ -358,15 +361,51 @@ static int16_t num_achievements(void) {
 
 static Layer *s_layer_target;
 
+
+static void draw_clock_indices(const GRect* bounds, GContext *ctx) {
+    GRect target_bounds = grect_crop(*bounds, (bounds->size.w / 2) - TARGET_RADIUS);
+#if !PBL_PLATFORM_CHALK
+    // correct for rounding errors, I guess?
+    target_bounds.size.w += 2;
+    target_bounds.size.h += 2;
+#endif // PBL_PLATFORM_CHALK
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
+    #define NUM_CLOCK_LINES (12)
+    for (int32_t i = 0; i < NUM_CLOCK_LINES; i++) {
+        const int16_t angle = i * DEG_TO_TRIGANGLE(360 / NUM_CLOCK_LINES);
+        const GPoint circumference_point = gpoint_from_polar(target_bounds, GOvalScaleModeFitCircle, angle);
+        int32_t line_len = ((i % 3) == 0) ? 10 : 5;
+        const GPoint inner_point = point_from_angle(circumference_point, angle, -line_len);
+        graphics_draw_line(ctx, circumference_point, inner_point);
+    }
+}
+
+static void finish_load(void);  // TODO move
+static int16_t s_target_intro_frame = 0;
+static void target_nextframe(void* context) {
+    if (s_target_intro_frame == -1){
+        finish_load();
+    } else {
+        s_target_intro_frame ++;
+        app_timer_register(MS_PER_FRAME, target_nextframe, NULL);
+    }
+    layer_mark_dirty(s_layer_target);
+}
 static void draw_target(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
 
+    const int16_t final_ring_width = TARGET_RADIUS / TARGET_NUM_RINGS;
+
+    graphics_color_rect(ctx, bounds, 0, GCornerNone, GColorMayGreen);
 #if !PBL_CHALK
     // grass with drop-shadow
-    graphics_color_rect(ctx, bounds, 0, GCornerNone, GColorMayGreen);
-    const uint16_t shadow_radius = PBL_IF_RECT_ELSE(TARGET_RADIUS + 5, TARGET_RADIUS);  // bigger looks better on rect
-    graphics_color_circle(ctx, (GPoint){center.x - 5, center.y + 5}, shadow_radius, GColorDarkGreen);
+    // const uint16_t final_target_radius = TARGET_NUM_RINGS * ring_width;
+    // const uint16_t offset = final_target_radius / 40;
+    // const uint16_t extra = PBL_IF_RECT_ELSE(offset, 0);
+    // const int16_t shadow_radius = MUL_FRACT(final_target_radius, numerator_countdown, denominator_countdown) + extra;
+    // graphics_color_circle(ctx, (GPoint){center.x - offset, center.y + offset}, shadow_radius, GColorDarkGreen);
 #endif // !PBL_CHALK
 
     // face
@@ -385,29 +424,67 @@ static void draw_target(Layer *layer, GContext *ctx) {
         GColorWhite,
 #endif // PBL_BW
     };
-    const int16_t ring_width = TARGET_RADIUS / TARGET_NUM_RINGS;
-    for (size_t i = 0; i < TARGET_NUM_RINGS; i++) {
-        graphics_color_circle(ctx, center, (TARGET_NUM_RINGS - i) * ring_width, colors[i]);
-    }
-    // 10spot
-    graphics_color_circle(ctx, center, ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorLightGray));
+    #define MAXVEL MUL_FRACT(final_ring_width, 3, 5)
+    // static int16_t ring_velocity[TARGET_NUM_RINGS] = {MAXVEL, MAXVEL-1, MAXVEL-2, MAXVEL-3, MAXVEL-4};
+    static int16_t ring_velocity[TARGET_NUM_RINGS] = {MAXVEL, MAXVEL, MAXVEL, MAXVEL, MAXVEL};
+    static int16_t ring_size[TARGET_NUM_RINGS] = {INT16_MAX};
+    if (ring_size[0] == INT16_MAX) {
+        // initialize ring size to an even number of frames away from max
+        // so they all reach the same distance beyond the max
+        for (int16_t i = 0; i < TARGET_NUM_RINGS; i++) {
+            const int16_t final_radius = (TARGET_NUM_RINGS - i) * final_ring_width;
+            ring_size[i] = ((final_radius + (final_ring_width / 4)) % ring_velocity[i]);
+        }
+    };
+    int16_t num_done = 0;
+    for (int16_t i = 0; i < TARGET_NUM_RINGS; i++) {
+        const int16_t ring_start_frame = i * 3;
+        const int16_t final_radius = (TARGET_NUM_RINGS - i) * final_ring_width;
 
-    // clock indices
-    GRect target_bounds = grect_crop(bounds, (bounds.size.w / 2) - TARGET_RADIUS);
-#if !PBL_PLATFORM_CHALK
-    // correct for rounding errors, I guess?
-    target_bounds.size.w += 2;
-    target_bounds.size.h += 2;
-#endif // PBL_PLATFORM_CHALK
-    graphics_context_set_stroke_width(ctx, 1);
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
-    #define NUM_CLOCK_LINES (12)
-    for (int32_t i = 0; i < NUM_CLOCK_LINES; i++) {
-        const int16_t angle = i * DEG_TO_TRIGANGLE(360 / NUM_CLOCK_LINES);
-        const GPoint circumference_point = gpoint_from_polar(target_bounds, GOvalScaleModeFitCircle, angle);
-        int32_t line_len = ((i % 3) == 0) ? 10 : 5;
-        const GPoint inner_point = point_from_angle(circumference_point, angle, -line_len);
-        graphics_draw_line(ctx, circumference_point, inner_point);
+        if ((s_target_intro_frame == -1) || (s_target_intro_frame >= ring_start_frame)) {
+            if (ring_size[i] < final_radius) {
+                // initial growing phase
+                ring_size[i] += ring_velocity[i];
+            } else if ((ring_velocity[i] != 0) || (ring_size[i] > final_radius)) {
+                // going or gone past the final size; accelerate backwards
+                ring_velocity[i] -= (MUL_FRACT(MAXVEL, 1, 2));
+                ring_size[i] += ring_velocity[i];
+                if ((ring_velocity[i] < 0) && (ring_size[i] <= final_radius)) {
+                    // shrank to the final size; finish
+                    ring_size[i] = final_radius;
+                    ring_velocity[i] = 0;
+                }
+            } else {
+                // finished
+                num_done ++;
+            }
+            graphics_color_circle(ctx, center, ring_size[i], colors[i]);
+        }
+    }
+    if ((num_done >= TARGET_NUM_RINGS) && (s_target_intro_frame != -1)) {
+        LOG("Finished target intro at frame #%d (%dms)", s_target_intro_frame, s_target_intro_frame * MS_PER_FRAME);
+        s_target_intro_frame = -1;
+    }
+
+    // for (size_t i = 0; i < TARGET_NUM_RINGS; i++) {
+    //     const size_t j = (TARGET_NUM_RINGS - i);
+    //     const size_t ring_start_frame = MUL_FRACT((j + 1), TARGET_INTRO_COUNTDOWN_START, TARGET_NUM_RINGS);
+    //     const uint16_t final_radius = j * ring_width;
+    //     const uint16_t largest_radius = final_radius + (final_ring_width / 2);
+    //     const size_t ring_largest_radius_time = ring_start_frame - (TARGET_INTRO_COUNTDOWN_START / 5);
+    //     if (s_target_intro_countdown < ring_start_frame) {
+    //         graphics_color_circle(ctx, center, MUL_FRACT(j * ring_width, ring_start_frame - s_target_intro_countdown, ring_start_frame), colors[i]);
+    //     }
+    // }
+    // if (s_target_intro_frame == -1)
+    {
+        // 10spot
+        // graphics_color_circle(ctx, center, final_ring_width, PBL_IF_COLOR_ELSE(GColorYellow, GColorLightGray));
+        graphics_color_circle(ctx, center, final_ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorLightGray));
+    }
+
+    if (s_target_intro_frame == -1) {
+        draw_clock_indices(&bounds, ctx);
     }
 }
 
@@ -1205,7 +1282,7 @@ static void animate_fall(Layer* layer, GContext* ctx) {
         }
     }
     if (any_still_falling) {
-        app_timer_register(33, &continue_falling, NULL);  // 30fps
+        app_timer_register(FRAMERATE, &continue_falling, NULL);
     }
 }
 
@@ -1227,7 +1304,7 @@ static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits unit
     s_state.min = tick_time->tm_min;
     s_state.sec = tick_time->tm_sec;
 
-    int16_t delay = 1;
+    int16_t delay = (shot_reason == SHOT_REASON_INIT) ? 0 : 1;
 
 #if SECOND_HAND
     if (units_changed & SECOND_UNIT) {
@@ -1326,15 +1403,19 @@ static void main_window_load(Window *window) {
     status_text_create(window_layer);
     layer_add_child(window_layer, (Layer*)s_layer_status_text);
 
-    tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
-    accel_tap_service_subscribe(accel_tap_handler);
+    target_nextframe(NULL);
 
     achievements_load();
     (void)achievement_dismiss();
 
-    reshoot_indicator_arrows(SHOT_REASON_INIT);
-
     s_initialising = false;
+}
+
+// Called after the intro animation finishes
+static void finish_load(void) {
+    tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
+    accel_tap_service_subscribe(accel_tap_handler);
+    reshoot_indicator_arrows(SHOT_REASON_INIT);
 }
 
 static void main_window_unload(Window *window) {

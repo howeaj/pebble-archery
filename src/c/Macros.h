@@ -12,6 +12,7 @@
 #define ABSDIFF_WRAP(a, b, max) MIN(ABS((a) - (b)), (max) + 1 - ABS((a) - (b)))
 #define SIGN(a) (((a) >= 0) ? 1 : -1)
 #define SQUARE(a) ((a) * (a))
+#define MUL_FRACT(val, numerator, denominator) (((val) * (numerator)) / (denominator))
 
 // Debugging
 #if DEBUG
