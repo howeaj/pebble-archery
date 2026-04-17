@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5
+
+- Animated ripple effect synchronised with arrow hits and pulls
+- "NORTH STAR" trophy inverts gravity
+- Shoot hours first
+- Faster rain of arrows
+
 ## 1.4
 
 - Rain of arrows on trophy success

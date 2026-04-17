@@ -20,7 +20,6 @@
         hanger
         bouncer
         pass-through
-    target shake on hit?
 
     shake too hard -> target falls off
     extra achievement when arrows are far apart?
@@ -107,6 +106,9 @@ State s_state;
 #define MS_PER_FRAME (MS_PER_S / FRAMERATE)
 #define MS_PER_ARROW_SHOOT_FRAME (50)
 
+#if DEMO
+static int16_t s_demo_north = DEG_TO_TRIGANGLE(-65);
+#endif // demo
 
 /******************************************************************************
  Generic functions
@@ -215,6 +217,8 @@ static void animate_scroll(Layer *layer, bool appear, bool from_below, bool* was
 #define COMPASS_CALIB_POLL_RATE_MS (2000)  // how often to check progress while calibrating. Must be < PEEK_TIMEOUT_MS.
 
 static TextLayer* s_layer_status_text;
+static bool s_magnetize_arrows = false;
+static int32_t s_last_compass_arrow_angle = 0;
 
 static void show_status_message(bool show){
     static bool was_visible = false;
@@ -394,12 +398,18 @@ static void target_nextframe(void* context) {
     }
     layer_mark_dirty(s_layer_target);
 }
-static void target_start_ripple(uint32_t delay_ms) {
-    s_target_ripple_frame = 0;
-    if (delay_ms) {
-        app_timer_register(delay_ms, target_nextframe, NULL);
+static void target_ripple_start(uint32_t delay_ms) {
+    if (s_target_ripple_frame == -1) {
+        s_target_ripple_frame = 0;
+        if (delay_ms) {
+            LOG("Ripple start delay");
+            app_timer_register(delay_ms, target_nextframe, NULL);
+        } else {
+            LOG("Ripple start immediate");
+            target_nextframe(NULL);
+        }
     } else {
-        target_nextframe(NULL);
+        LOG("Ripple already running");
     }
 }
 static void draw_target(Layer *layer, GContext *ctx) {
@@ -408,14 +418,15 @@ static void draw_target(Layer *layer, GContext *ctx) {
 
     const int16_t final_ring_width = TARGET_RADIUS / TARGET_NUM_RINGS;
 
+#if !PBL_CHALK
+    // grass
     graphics_color_rect(ctx, bounds, 0, GCornerNone, GColorMayGreen);
-#if !PBL_CHALK  // TODO put shadow back in
-    // grass with drop-shadow
-    // const uint16_t final_target_radius = TARGET_NUM_RINGS * ring_width;
-    // const uint16_t offset = final_target_radius / 40;
-    // const uint16_t extra = PBL_IF_RECT_ELSE(offset, 0);
-    // const int16_t shadow_radius = MUL_FRACT(final_target_radius, numerator_countdown, denominator_countdown) + extra;
-    // graphics_color_circle(ctx, (GPoint){center.x - offset, center.y + offset}, shadow_radius, GColorDarkGreen);
+    // with drop-shadow
+    const uint16_t final_target_radius = TARGET_NUM_RINGS * final_ring_width;
+    const uint16_t offset = final_target_radius / 20;
+    const uint16_t extra = PBL_IF_RECT_ELSE(offset, 0);
+    const int16_t shadow_radius = final_target_radius + extra;
+    graphics_color_circle(ctx, (GPoint){center.x - offset, center.y + offset}, shadow_radius, GColorDarkGreen);
 #endif // !PBL_CHALK
 
     // face
@@ -434,7 +445,11 @@ static void draw_target(Layer *layer, GContext *ctx) {
         GColorWhite,
 #endif // PBL_BW
     };
+#if PBL_DISPLAY_WIDTH > 150
     #define MAXVEL MUL_FRACT(final_ring_width, 3, 5)
+#else
+    #define MAXVEL MUL_FRACT(final_ring_width, 1, 2)
+#endif
     // TODO now its just a simple ripple, this can probably be simplified
     static int16_t ring_velocity[TARGET_NUM_RINGS] = {MAXVEL, MAXVEL, MAXVEL, MAXVEL, MAXVEL};
     static int16_t ring_size[TARGET_NUM_RINGS] = {0};
@@ -620,6 +635,9 @@ static void arrow_spam_start(void);  // TODO move
 
 static void achievement_complete(Achievement achievement) {
     LOG("ACHIEVEMENT COMPLETE: %u", achievement);
+    if (achievement == ACHIEVEMENT_COMPASS) {
+        s_magnetize_arrows = true;
+    }
     if (!achievement_in(s_achievements, achievement)) {
         LOG("NEW ACHIEVEMENT %d", achievement);
 
@@ -689,7 +707,7 @@ static ArrowContext s_arrows[MAX_ARROWS];
 #define COMPASS_ARROW_INDEX (3)
 #define FIRST_SPAM_ARROW_INDEX (2)  // the remaining arrows < MAX_ARROWS are used for arrow spam
 
-#define LAST_ARROW_SHOT HOUR_ARROW_INDEX  // the last arrow to be shot on each regular round
+#define LAST_ARROW_SHOT MINUTE_ARROW_INDEX  // the last arrow to be shot on each regular round
 
 
 static ArrowContext s_arrows_falling[MAX_ARROWS];
@@ -698,8 +716,12 @@ static size_t s_arrows_falling_index = 0;  // the next slot in which to place a 
 
 
 static inline bool is_hour_hand(const ArrowContext* arrow) {
-    return arrow - s_arrows == 0;
+    return arrow - s_arrows == HOUR_ARROW_INDEX;
 }
+static inline bool is_minute_hand(const ArrowContext* arrow) {
+    return arrow - s_arrows == MINUTE_ARROW_INDEX;
+}
+
 
 static inline bool arrow_spam_is_shooting(void);  // TODO move
 
@@ -825,7 +847,7 @@ static void arrow_hit_effects(ArrowContext* arrow) {
         arrow->hit_effects_started = true;
         // vibe
         if ((arrow->shot_reason != SHOT_REASON_TICK) && (arrow->shot_reason != SHOT_REASON_SPAM)) {
-            if ((DEMO && (arrow->distance < 10)) || arrow->achievements != 0) {
+            if ((DEMO && (arrow->distance < 10) && (arrow->shot_reason != SHOT_REASON_COMPASS)) || arrow->achievements != 0) {
                 VIBE(300);
             } else {
                 if (DEMO || (arrow->shot_reason == SHOT_REASON_INIT)) {
@@ -935,30 +957,65 @@ static void arrow_shoot(ArrowContext* arrow, int32_t angle, int32_t length, int1
 
 #if DEMO
 static void demo_override_arrow_hits(ArrowContext* arrow) {
-    static int counter = 2;
-    if (counter > 0) {
-        if (is_hour_hand(arrow)) {
-            arrow->color = GColorCyan;
-        } else {
-            arrow->color = GColorMagenta;
+    if (arrow->shot_reason == SHOT_REASON_COMPASS) {
+        static int32_t north_counter = 2;
+        switch (north_counter) {
+        case 2:
+            s_demo_north = DEG_TO_TRIGANGLE(-45);
+            break;
+        case 1:
+            s_demo_north = DEG_TO_TRIGANGLE(30);
+            break;
+        case 0:
+            s_demo_north = DEG_TO_TRIGANGLE(12);
+            break;
         }
-    } else if (counter > -2) {
-        if (is_hour_hand(arrow)) {
-            arrow->color = GColorRed;
-        } else{
-            arrow->color = GColorGreen;
-        }
-    } else {
-        if (is_hour_hand(arrow)) {
-            arrow->distance = 5;
-            arrow->color = GColorGreen;
-        } else{
-            arrow->distance = 13;// gabbro 55;
-            arrow->color = GColorYellow;
-        }
-        // achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
+        s_last_compass_arrow_angle = s_demo_north;
+        arrow->angle = s_demo_north;
+        north_counter --;
     }
-    counter--;
+    else {
+        static int counter = 4;
+        if (counter > 2) {
+            if (is_hour_hand(arrow)) {
+                arrow->color = GColorMagenta;
+                arrow->distance = 20;
+            } else {
+                arrow->color = GColorCyan;
+                arrow->distance = 15;
+            }
+        } else if (counter > 0) {
+            if (is_hour_hand(arrow)) {
+                arrow->color = GColorRed;
+            } else{
+                arrow->color = GColorGreen;
+            }
+        } else if (counter > -2) {
+            if (is_hour_hand(arrow)) {
+                arrow->color = GColorMagenta;
+            } else {
+                arrow->color = GColorCyan;
+            }
+        } else if (counter > -4) {
+            if (is_hour_hand(arrow)) {
+                arrow->distance = 5;
+                arrow->color = GColorGreen;
+            } else{
+                arrow->distance = 7;// gabbro 55;
+                arrow->color = GColorYellow;
+            }
+            achievement_add(&arrow->achievements, ACHIEVEMENT_COMPASS);
+        } else {
+            if (is_hour_hand(arrow)) {
+                arrow->color = GColorMagenta;
+                arrow->distance = 20;
+            } else {
+                arrow->color = GColorCyan;
+                arrow->distance = 15;
+            }
+        }
+        counter--;
+    }
 }
 #endif // DEMO
 
@@ -997,9 +1054,7 @@ static void arrow_spam_callback(void* context) {
         );
         switch (s_spam_style) {
         case SPAM_STYLE_RANDOM:
-#if !DEMO
             break;
-#endif // !DEMO
         case SPAM_STYLE_CENTRE:
             arrow->distance = 0;
             break;
@@ -1012,23 +1067,33 @@ static void arrow_spam_callback(void* context) {
             break;
         }
         s_spam_countdown --;
-        s_spam_timer = app_timer_register(300, arrow_spam_callback, NULL);
+        s_spam_timer = app_timer_register(100, arrow_spam_callback, NULL);
     }
 }
 // Return true if stopped an ongoing spam
 static bool arrow_spam_stop(void) {
     if (s_spam_countdown >= 1) {
         LOG("arrow_spam_stopped");
+        target_ripple_start(0);
         s_spam_countdown = 0;
         if (s_spam_timer != NULL) {
             app_timer_cancel(s_spam_timer);
             s_spam_timer = NULL;
         }
-        for (size_t i = FIRST_SPAM_ARROW_INDEX; i < MAX_ARROWS; i++) {
+#if DEMO
+        size_t i = 0;
+#else // !DEMO
+        size_t i = FIRST_SPAM_ARROW_INDEX;
+#endif // !DEMO
+        for (; i < MAX_ARROWS; i++) {
             arrow_pull(&s_arrows[i]);
         }
         s_spam_style = (SpamStyle)(((uint8_t)s_spam_style + 1) % (uint8_t)SPAM_STYLE_MAX);  // cycle through styles
+#if DEMO
+        return false;
+#else // !DEMO
         return true;
+#endif // !DEMO
     }
     return false;
 }
@@ -1038,6 +1103,9 @@ static void arrow_spam_start(void) {
     if (s_spam_style == SPAM_STYLE_MAX) {  // start with random style
         s_spam_style = (SpamStyle)(rand() % (int)SPAM_STYLE_MAX);
     }
+#if DEMO
+    s_spam_style = SPAM_STYLE_CENTRE;
+#endif // DEMO
     s_spam_index = FIRST_SPAM_ARROW_INDEX;
     s_spam_countdown = SPAM_COUNDOWN_START;
     arrow_spam_callback(NULL);
@@ -1085,8 +1153,8 @@ static int32_t evaluate_achievement_upright(ArrowContext *arrow, int32_t max_dis
     const bool is_upright = (total_deviation == 0);
 
     static AccelData accel_other = {0};
-    STATIC_ASSERT(LAST_ARROW_SHOT == HOUR_ARROW_INDEX);
-    if (is_hour_hand(arrow)) {
+    STATIC_ASSERT(LAST_ARROW_SHOT == MINUTE_ARROW_INDEX);
+    if (is_minute_hand(arrow)) {
         // must not move between the two shots
         const bool is_still = MAX(
             ABSDIFF(accel->x, accel_other.x),
@@ -1202,7 +1270,7 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     // LOG("%d ~ %d = %d", min_distance, max_distance, arrow->distance);
 
 #if DEMO
-    if ((arrow->shot_reason != SHOT_REASON_COMPASS) && (arrow->shot_reason != SHOT_REASON_SPAM)) {
+    if (arrow->shot_reason != SHOT_REASON_SPAM) {
         demo_override_arrow_hits(arrow);
     }
 #endif // DEMO
@@ -1251,20 +1319,27 @@ static void animate_fall(Layer* layer, GContext* ctx) {
             arrow->offset_pos.x += arrow->velocity.x;
             arrow->offset_pos.y += arrow->velocity.y;
 
+            // TODO affect acceleration direction based on compass or accelerometer direction
+            const int32_t opposite_gravity_angle = (
+                // s_magnetize_arrows ? s_last_compass_arrow_angle : DEG_TO_TRIGANGLE(0)  // TODO not quite working
+                s_magnetize_arrows ? DEG_TO_TRIGANGLE(180) : DEG_TO_TRIGANGLE(0)
+            );
+            const int32_t y_dir = (s_magnetize_arrows ? -1 : 1);
+
             // velocity
-            arrow->velocity.y += (PBL_DISPLAY_WIDTH < 200) ? 1 : 2;  // gravity TODO change according to pebble's orientation
+            arrow->velocity.y += y_dir * ((PBL_DISPLAY_WIDTH < 200) ? 1 : 2);
             if (ABS(arrow->velocity.x) > 2) {  // air resistance
                 arrow->velocity.x -= SIGN(arrow->velocity.x);
             }
 
-            // rotation; turn to point downwards (i.e. angle towards 0) with vertical air resistance
-            if (arrow->velocity.y > 0) {
+            // rotation; turn to point downwards with vertical air resistance
+            if ((y_dir * arrow->velocity.y) > 0) {
                 const int32_t current_angle = arrow->angle + arrow->offset_angle;
                 // Vertical air resistance scales with downward-velocity and horizontalness.
                 const int32_t velocity_scalar = 8 * (arrow->velocity.y * arrow->velocity.y);
                 // Sine gives us horizontalness and also the direction in which to turn.
-                const int32_t turn = (velocity_scalar * sin_lookup(current_angle)) / TRIG_MAX_RATIO;
-                if (ABSDIFF_WRAP(current_angle, DEG_TO_TRIGANGLE(0), DEG_TO_TRIGANGLE(360)) > ABS(turn)) {
+                const int32_t turn = (velocity_scalar * sin_lookup(current_angle - opposite_gravity_angle)) / TRIG_MAX_RATIO;
+                if (ABSDIFF_WRAP(current_angle, opposite_gravity_angle, DEG_TO_TRIGANGLE(360)) > ABS(turn)) {
                     arrow->offset_angle -= turn;
                 } else {
                     arrow->offset_angle = -arrow->angle;
@@ -1299,11 +1374,8 @@ static bool shoot_compass_arrow(void) {
     bool shot = false;
     CompassHeadingData compass = {0};
     if (compass_service_peek_logged(&compass)) {
-        #if DEMO
-            const int32_t angle = DEG_TO_TRIGANGLE(-45);
-        #else // !DEMO
-            const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading;
-        #endif // !DEMO
+        const int32_t angle = TRIG_MAX_ANGLE - compass.true_heading;
+        s_last_compass_arrow_angle = angle;
         arrow_shoot(&s_arrows[COMPASS_ARROW_INDEX], angle, ARROW_LENGTH_LONG, 0, SHOT_REASON_COMPASS);
         shot = true;
     } else if (compass.compass_status == CompassStatusUnavailable) {
@@ -1316,7 +1388,7 @@ static bool shoot_compass_arrow(void) {
 }
 #endif // PBL_COMPASS
 
-STATIC_ASSERT(LAST_ARROW_SHOT == HOUR_ARROW_INDEX);
+STATIC_ASSERT(LAST_ARROW_SHOT == MINUTE_ARROW_INDEX);
 // Shoot all indicator arrows, ending with the hour hand
 static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits units_changed, ShotReason shot_reason) {
     s_state.hour = tick_time->tm_hour % 12;
@@ -1335,16 +1407,17 @@ static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits unit
 #endif // SECOND_HAND
 
     if (units_changed & MINUTE_UNIT) {
-        const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
-        arrow_shoot(&s_arrows[MINUTE_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, shot_reason);
-        delay++;
-
         { // hours
             const int32_t angle = (
                 ((s_state.hour * MINUTES_PER_HOUR) + s_state.min)
                 * (TRIG_MAX_ANGLE / (MINUTES_PER_DAY / 2))
             );
             arrow_shoot(&s_arrows[HOUR_ARROW_INDEX], angle, ARROW_LENGTH_SHORT, delay, shot_reason);
+            delay++;
+        }
+        { // minutes
+            const int32_t angle = s_state.min * (TRIG_MAX_ANGLE / MINUTES_PER_HOUR);
+            arrow_shoot(&s_arrows[MINUTE_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, shot_reason);
             delay++;
         }
     }
@@ -1364,10 +1437,15 @@ static void shoot_indicator_arrows_for_time_handler(void* context) {
 
 // Start the main shooting sequence
 static void start_shoot_sequence(struct tm *tick_time, TimeUnits units_changed, ShotReason shot_reason) {
+    TRACE("start_shoot_sequence");
     if (tick_time == NULL) {
         const time_t now = time(NULL);
         tick_time = localtime(&now);
     }
+#if DEMO
+    tick_time->tm_hour = 12;
+    tick_time->tm_min = 22;
+#endif
 
     uint32_t delay_ms = 0;
 
@@ -1381,7 +1459,7 @@ static void start_shoot_sequence(struct tm *tick_time, TimeUnits units_changed, 
 #endif // PBL_COMPASS
 
     // which causes a ripple
-    target_start_ripple(delay_ms);
+    target_ripple_start(delay_ms);
 
     // which causes the other arrows to fall out & reshoot
     // TODO pull specific arrows exactly when the ripple reaches each scoreband
@@ -1438,11 +1516,12 @@ static void main_window_load(Window *window) {
     status_text_create(window_layer);
     layer_add_child(window_layer, (Layer*)s_layer_status_text);
 
+    tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
+    accel_tap_service_subscribe(accel_tap_handler);
+
     achievements_load();
     (void)achievement_dismiss();
 
-    tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
-    accel_tap_service_subscribe(accel_tap_handler);
     start_shoot_sequence(NULL, MINUTE_UNIT | HOUR_UNIT, SHOT_REASON_INIT);
 
     s_initialising = false;
