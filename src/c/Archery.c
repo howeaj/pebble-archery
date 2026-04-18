@@ -173,6 +173,16 @@ static bool accel_service_peek_logged(AccelData* data) {
     return retval >= 0;
 }
 
+#define LOW_BATTERY_THRESHOLD_PERCENT (20)
+
+static bool is_low_battery(void) {
+    BatteryChargeState chargeState = battery_state_service_peek();
+    return (
+        (chargeState.charge_percent <= LOW_BATTERY_THRESHOLD_PERCENT)
+        && !chargeState.is_charging
+    );
+}
+
 // quake 3 sqrt
 static float fast_sqrt(const float x) {
     const float xhalf = 0.5f * x;
@@ -1260,8 +1270,13 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         min_distance = 0;
         max_distance = SCOREBAND_WIDTH - arrow_width;
     } else {
-        min_distance = SCOREBAND_WIDTH + arrow_width;
-        max_distance = clue_distance;
+        if (is_minute_hand(arrow) && is_low_battery()) {
+            min_distance = TARGET_RADIUS - SCOREBAND_WIDTH;
+            max_distance = TARGET_RADIUS - (SCOREBAND_WIDTH / 2);
+        } else {
+            min_distance = SCOREBAND_WIDTH + arrow_width;
+            max_distance = clue_distance;
+        }
     }
 
 #if DEMO

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6
+
+- Low battery indicated by the minute hand always hitting the outermost ring
+
 ## 1.5
 
 - Animated ripple effect synchronised with arrow hits and pulls
