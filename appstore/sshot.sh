@@ -18,9 +18,10 @@ pebble kill
 pebble wipe
 pebble install --emulator $1
 sleep 1
+
+# doesn't work; done in C instead
 # pebble emu-set-time --emulator $1 --utc 16:10:30
-# pebble emu-set-time --emulator $1 --utc 10:37:30
-pebble emu-set-time --emulator $1 --utc 12:22:30
-sleep 2
-pebble screenshot --emulator $1 --no-correction
+
+pebble emu-button click back
+pebble screenshot --emulator $1
 sleep 1

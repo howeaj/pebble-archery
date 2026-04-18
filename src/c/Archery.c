@@ -46,6 +46,11 @@
 #define DISABLE_VIBE false
 #define FORCE_COMPASS (DEMO || false)  // fake compass calibrated
 #define FORCE_LUCK false  // always hit centre
+#if DEMO
+    #define DEMO_BACKLIGHT_ENABLE(on) light_enable(on)
+#else  // !DEMO
+    #define DEMO_BACKLIGHT_ENABLE(on)
+#endif  // !DEMO
 
 #include "Macros.h"
 
@@ -979,10 +984,10 @@ static void demo_override_arrow_hits(ArrowContext* arrow) {
         if (counter > 2) {
             if (is_hour_hand(arrow)) {
                 arrow->color = GColorMagenta;
-                arrow->distance = 20;
+                arrow->distance = 12;
             } else {
-                arrow->color = GColorCyan;
-                arrow->distance = 15;
+                arrow->color = PBL_IF_BW_ELSE(GColorBlack, GColorCyan);
+                arrow->distance = 34;
             }
         } else if (counter > 0) {
             if (is_hour_hand(arrow)) {
@@ -1444,7 +1449,7 @@ static void start_shoot_sequence(struct tm *tick_time, TimeUnits units_changed, 
     }
 #if DEMO
     tick_time->tm_hour = 12;
-    tick_time->tm_min = 22;
+    tick_time->tm_min = 23;
 #endif
 
     uint32_t delay_ms = 0;
@@ -1459,7 +1464,9 @@ static void start_shoot_sequence(struct tm *tick_time, TimeUnits units_changed, 
 #endif // PBL_COMPASS
 
     // which causes a ripple
-    target_ripple_start(delay_ms);
+    if (units_changed & MINUTE_UNIT) {
+        target_ripple_start(delay_ms);
+    }
 
     // which causes the other arrows to fall out & reshoot
     // TODO pull specific arrows exactly when the ripple reaches each scoreband
@@ -1558,7 +1565,11 @@ static void deinit(void) {
 }
 
 int main(void) {
+    DEMO_BACKLIGHT_ENABLE(true);
+
     init();
     app_event_loop();
     deinit();
+
+    DEMO_BACKLIGHT_ENABLE(false);
 }
