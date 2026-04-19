@@ -10,7 +10,7 @@
         align "up" with each arrow
         robin hood
 
-    accelerometer mode (intsead of compass)
+    accelerometer mode (instead of compass)
         - shoot arrow in the direction of the shake
         - try to hit another arrow, I guess
 
@@ -47,8 +47,10 @@
 #define FORCE_COMPASS (DEMO || false)  // fake compass calibrated
 #define FORCE_LUCK false  // always hit centre
 #if DEMO
+    #define IF_DEMO_ELSE(is_demo, not_demo) (is_demo)
     #define DEMO_BACKLIGHT_ENABLE(on) light_enable(on)
 #else  // !DEMO
+    #define IF_DEMO_ELSE(is_demo, not_demo) (not_demo)
     #define DEMO_BACKLIGHT_ENABLE(on)
 #endif  // !DEMO
 
@@ -1095,20 +1097,12 @@ static bool arrow_spam_stop(void) {
             app_timer_cancel(s_spam_timer);
             s_spam_timer = NULL;
         }
-#if DEMO
-        size_t i = 0;
-#else // !DEMO
-        size_t i = FIRST_SPAM_ARROW_INDEX;
-#endif // !DEMO
+        size_t i = IF_DEMO_ELSE(0, FIRST_SPAM_ARROW_INDEX);
         for (; i < MAX_ARROWS; i++) {
             arrow_pull(&s_arrows[i]);
         }
         s_spam_style = (SpamStyle)(((uint8_t)s_spam_style + 1) % (uint8_t)SPAM_STYLE_MAX);  // cycle through styles
-#if DEMO
-        return false;
-#else // !DEMO
-        return true;
-#endif // !DEMO
+        return IF_DEMO_ELSE(false, true);
     }
     return false;
 }

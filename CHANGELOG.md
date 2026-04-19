@@ -2,7 +2,7 @@
 
 ## 1.6
 
-- Low battery indicated by the minute hand always hitting the outermost ring
+- Low battery (<20%) indicated by the minute hand always hitting the outermost ring
 
 ## 1.5
 

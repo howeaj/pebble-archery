@@ -8,11 +8,11 @@ Instructions:
  - Get both arrows perfectly in the centre together for a small surprise.
  - There's also a random chance to hit the centre regardless; some say luck is also a skill...
 
-Supports all pebbles, but it's perfect for the new big-colour-screen Time 2 and Round 2!
+If your battery is low (<20%), the minute arrow will always hit the outermost ring.
+Supports all pebbles, but it's perfect for the new big-colour-screen Time 2 and especially Round 2!
 Note the compass is turned off to save power until you shake.
 
 Planned updates:
- - Indicate low battery with lazy arrows
  - More ways to win
  - More fun special effects
  - Customisation options
