@@ -46,13 +46,17 @@
 #define DISABLE_VIBE false
 #define FORCE_COMPASS (DEMO || false)  // fake compass calibrated
 #define FORCE_LUCK false  // always hit centre
+#define FORCE_BACKLIGHT_ON (DEMO || false)
 #if DEMO
     #define IF_DEMO_ELSE(is_demo, not_demo) (is_demo)
-    #define DEMO_BACKLIGHT_ENABLE(on) light_enable(on)
 #else  // !DEMO
     #define IF_DEMO_ELSE(is_demo, not_demo) (not_demo)
-    #define DEMO_BACKLIGHT_ENABLE(on)
 #endif  // !DEMO
+#if FORCE_BACKLIGHT_ON
+    #define DEMO_BACKLIGHT_ENABLE(on) light_enable(on)
+#else // !FORCE_BACKLIGHT_ON
+    #define DEMO_BACKLIGHT_ENABLE(on)
+#endif // !FORCE_BACKLIGHT_ON
 
 #include "Macros.h"
 
@@ -394,6 +398,56 @@ static int16_t num_achievements(void) {
 
 static Layer *s_layer_target;
 
+#define MAX_HOLES (30)
+typedef struct Hole {
+    uint16_t angle;
+    uint16_t distance;  // from centre
+} Hole;
+static Hole s_holes[MAX_HOLES] = {0};  // circular buffer
+static uint16_t s_num_holes = 0;  // number of holes to draw
+static size_t s_holes_index = 0;  // the next slot in which to place an arrowhole
+
+// Return the location of the hole relative to `layer`
+static inline GPoint hole_location(const Layer* layer, const Hole* hole) {
+    const GRect bounds = layer_get_bounds(layer);
+    const GPoint center = grect_center_point(&bounds);
+    return point_from_angle(center, hole->angle, hole->distance);
+}
+
+// Add a new arrowhole to the draw list
+static void add_hole(uint16_t angle, uint16_t distance) {
+    s_holes_index = (s_holes_index + 1) % MAX_HOLES;
+    s_holes[s_holes_index].angle = angle;
+    s_holes[s_holes_index].distance = distance;
+    s_num_holes = MAX(s_num_holes, MAX_HOLES);
+}
+
+static void draw_holes(Layer* layer, GContext* ctx, const int16_t offsets[TARGET_NUM_RINGS]) {
+    const int16_t final_ring_width = TARGET_RADIUS / TARGET_NUM_RINGS;
+
+    graphics_context_set_fill_color(ctx, GColorDarkGray);
+    for (size_t hole_id = 0; hole_id < s_num_holes; hole_id++) {
+        Hole hole = s_holes[(s_holes_index + MAX_HOLES - hole_id) % MAX_HOLES];
+
+        // add offset for target ripple based on hole location
+        for (int16_t ring_id = 0; ring_id < TARGET_NUM_RINGS; ring_id++) {
+            const int16_t this_ring_radius = (TARGET_NUM_RINGS - ring_id) * final_ring_width;
+            int16_t next_smaller_ring_radius;
+            if (ring_id == (TARGET_NUM_RINGS - 1)) {  // special case 10spot
+                next_smaller_ring_radius = ((TARGET_NUM_RINGS - ring_id) * final_ring_width) / 2;
+            } else {
+                next_smaller_ring_radius = (TARGET_NUM_RINGS - ring_id - 1) * final_ring_width;
+            }
+            if (hole.distance > next_smaller_ring_radius) {
+                const int16_t distance_from_inner = final_ring_width - (this_ring_radius - hole.distance);
+                hole.distance += MUL_FRACT(offsets[ring_id], distance_from_inner, final_ring_width);
+                break;
+            }
+        }
+
+        graphics_fill_circle(ctx, hole_location(layer, &hole), 2);
+    }
+}
 
 static void draw_clock_indices(const GRect* bounds, GContext *ctx) {
     GRect target_bounds = grect_crop(*bounds, (bounds->size.w / 2) - TARGET_RADIUS);
@@ -482,6 +536,7 @@ static void draw_target(Layer *layer, GContext *ctx) {
     // TODO now its just a simple ripple, this can probably be simplified
     static int16_t ring_velocity[TARGET_NUM_RINGS] = {MAXVEL, MAXVEL, MAXVEL, MAXVEL, MAXVEL};
     static int16_t ring_size[TARGET_NUM_RINGS] = {0};
+    int16_t hole_offsets[TARGET_NUM_RINGS] = {0};
     if (s_target_ripple_frame == 1) {
         // starting ring size
         for (int16_t i = 0; i < TARGET_NUM_RINGS; i++) {
@@ -515,6 +570,7 @@ static void draw_target(Layer *layer, GContext *ctx) {
                 num_done ++;
             }
             graphics_color_circle(ctx, center, ring_size[i], colors[i]);
+            hole_offsets[i] = ring_size[i] - final_radius;
         }
     }
     if ((num_done >= TARGET_NUM_RINGS) && (s_target_ripple_frame != -1)) {
@@ -524,6 +580,8 @@ static void draw_target(Layer *layer, GContext *ctx) {
 
     // 10spot
     graphics_color_circle(ctx, center, final_ring_width / 2, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorLightGray));
+
+    draw_holes(layer, ctx, hole_offsets);
 
     if (s_target_ripple_frame == -1) {
         draw_clock_indices(&bounds, ctx);
@@ -745,10 +803,6 @@ static ArrowContext s_arrows_falling[MAX_ARROWS];
 // s_arrows_falling is just a circular buffer, no reserved slots
 static size_t s_arrows_falling_index = 0;  // the next slot in which to place a falling arrow
 
-static GPoint s_holes[MAX_ARROWS] = {0};  // circular buffer
-static uint16_t s_num_holes = 0;  // number of holes to draw
-static size_t s_holes_index = 0;  // the next slot in which to place an arrowhole
-
 
 static inline bool is_hour_hand(const ArrowContext* arrow) {
     return arrow - s_arrows == HOUR_ARROW_INDEX;
@@ -964,10 +1018,7 @@ static void arrow_pull(ArrowContext* original_arrow) {
         // note this velocity should be at least the length of the arrowpoint
         arrow->velocity = point_from_angle(GPointZero, arrow->angle, (PBL_DISPLAY_WIDTH < 200) ? 6 : 10);
 
-        // add a hole
-        s_holes_index = (s_holes_index + 1) % MAX_ARROWS;
-        s_holes[s_holes_index] = arrow_tip(s_layer_arrow, original_arrow);
-        s_num_holes = MAX(s_num_holes, MAX_ARROWS);
+        add_hole(arrow->angle, arrow->distance);
 
         layer_mark_dirty(s_layer_arrow);
     }
@@ -1396,22 +1447,11 @@ static void animate_fall(Layer* layer, GContext* ctx) {
     }
 }
 
-static void draw_holes(Layer* layer, GContext* ctx) {
-    graphics_context_set_antialiased(ctx, false);
-    graphics_context_set_fill_color(ctx, GColorDarkGray);
-    for (size_t i = 0; i < s_num_holes; i++) {
-        const GPoint* hole = &s_holes[(s_holes_index + MAX_ARROWS - i) % MAX_ARROWS];
-        graphics_fill_circle(ctx, *hole, 2);
-    }
-    graphics_context_set_antialiased(ctx, true);
-}
-
 
 // Callback to render s_layer_arrow
 static void arrow_canvas(Layer* layer, GContext* ctx) {
     PROFILE_START();
 
-    draw_holes(layer, ctx);
     animate_shots(layer, ctx);
     animate_fall(layer, ctx);
 
