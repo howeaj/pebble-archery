@@ -14,7 +14,6 @@
         - shoot arrow in the direction of the shake
         - try to hit another arrow, I guess
 
-    leave holes behind?
     special animation for robin hoods
     random animation for
         hanger
@@ -791,7 +790,12 @@ typedef struct ArrowContext {
     Achievements achievements;  // achievements for which this arrow has met the conditions
 } ArrowContext;
 
-#define MAX_ARROWS (15)
+#if PBL_PLATFORM_APLITE
+    #define MAX_ARROWS (10)
+#else // !PBL_PLATFORM_APLITE
+    #define MAX_ARROWS (15)
+#endif // !PBL_PLATFORM_APLITE
+
 #define ARROW_NUM_FRAMES (4)  // number of frames in the arrow shoot animation
 #define GColorWood GColorWindsorTan
 #define ARROW_DISTANCE_UNINITIALISED (-1)
@@ -1123,6 +1127,11 @@ static void demo_override_arrow_hits(ArrowContext* arrow) {
 
 // Arrowspam celebration;
 // Quickly shoot random arrows until the countdown ends or arrow_spam_stop() is called.
+#if PBL_PLATFORM_APLITE
+    #define ARROW_SPAM_PERIOD_MS (200)
+#else // !PBL_PLATFORM_APLITE
+    #define ARROW_SPAM_PERIOD_MS (100)
+#endif // !PBL_PLATFORM_APLITE
 #define SPAM_COUNDOWN_START (50)  // i.e. num_arrows_to_spam - 2
 static uint16_t s_spam_countdown = 0;  // 0 for off. 1 for done (so we know to pull them). >1 in progress.
 static bool s_spam_index = FIRST_SPAM_ARROW_INDEX;  // the next spam arrow to shoot
@@ -1168,7 +1177,7 @@ static void arrow_spam_callback(void* context) {
             break;
         }
         s_spam_countdown --;
-        s_spam_timer = app_timer_register(100, arrow_spam_callback, NULL);
+        s_spam_timer = app_timer_register(ARROW_SPAM_PERIOD_MS, arrow_spam_callback, NULL);
     }
 }
 // Return true if stopped an ongoing spam

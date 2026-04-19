@@ -3,7 +3,8 @@
 ## 1.7
 
 - Arrows now leave holes in the target
-- Graphics performance optimisation
+- Graphics performance optimisation for target drawing
+- Improve performance of rain of arrows on OG Pebble by reducing intensity
 
 ## 1.6
 
