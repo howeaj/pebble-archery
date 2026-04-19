@@ -439,6 +439,9 @@ static void target_ripple_start(uint32_t delay_ms) {
 static void draw_target(Layer *layer, GContext *ctx) {
     PROFILE_START();
 
+    // This saves ~90% of this func's total runtime (~33ms -> ~4ms on Gabbro)
+    graphics_context_set_antialiased(ctx, false);
+
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7
+
+- Graphics performance optimisation
+
 ## 1.6
 
 - Low battery (<20%) indicated by the minute hand always hitting the outermost ring
