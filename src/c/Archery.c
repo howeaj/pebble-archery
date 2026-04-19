@@ -403,8 +403,8 @@ typedef struct Hole {
     uint16_t distance;  // from centre
 } Hole;
 static Hole s_holes[MAX_HOLES] = {0};  // circular buffer
-static uint16_t s_num_holes = 0;  // number of holes to draw
-static size_t s_holes_index = 0;  // the next slot in which to place an arrowhole
+static size_t s_num_holes = 0;  // number of holes to draw
+static size_t s_holes_index = 0;  // the last slot in which an arrowhole was added
 
 // Return the location of the hole relative to `layer`
 static inline GPoint hole_location(const Layer* layer, const Hole* hole) {
@@ -418,7 +418,7 @@ static void add_hole(uint16_t angle, uint16_t distance) {
     s_holes_index = (s_holes_index + 1) % MAX_HOLES;
     s_holes[s_holes_index].angle = angle;
     s_holes[s_holes_index].distance = distance;
-    s_num_holes = MAX(s_num_holes, MAX_HOLES);
+    s_num_holes = MIN(s_num_holes + 1, MAX_HOLES);
 }
 
 static void draw_holes(Layer* layer, GContext* ctx, const int16_t offsets[TARGET_NUM_RINGS]) {

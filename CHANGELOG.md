@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8
+
+- Bugfix extra central arrowhole
+
 ## 1.7
 
 - Arrows now leave holes in the target
