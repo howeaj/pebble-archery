@@ -425,10 +425,15 @@ static void add_hole(uint16_t angle, uint16_t distance) {
 static void draw_holes(Layer* layer, GContext* ctx, const int16_t offsets[TARGET_NUM_RINGS]) {
     const int16_t final_ring_width = TARGET_RADIUS / TARGET_NUM_RINGS;
 
+#if PBL_COLOR
     graphics_context_set_fill_color(ctx, GColorDarkGray);
+#endif // PBL_COLOR
+
     for (size_t hole_id = 0; hole_id < s_num_holes; hole_id++) {
         Hole hole = s_holes[(s_holes_index + MAX_HOLES - hole_id) % MAX_HOLES];
-
+#if PBL_BW
+        graphics_context_set_fill_color(ctx, GColorWhite);
+#endif // PBL_BW
         // add offset for target ripple based on hole location
         for (int16_t ring_id = 0; ring_id < TARGET_NUM_RINGS; ring_id++) {
             const int16_t this_ring_radius = (TARGET_NUM_RINGS - ring_id) * final_ring_width;
@@ -441,6 +446,11 @@ static void draw_holes(Layer* layer, GContext* ctx, const int16_t offsets[TARGET
             if (hole.distance > next_smaller_ring_radius) {
                 const int16_t distance_from_inner = final_ring_width - (this_ring_radius - hole.distance);
                 hole.distance += MUL_FRACT(offsets[ring_id], distance_from_inner, final_ring_width);
+#if PBL_BW
+                if ((ring_id % 2) == 0) {
+                    graphics_context_set_fill_color(ctx, GColorDarkGray);
+                }
+#endif // PBL_BW
                 break;
             }
         }
