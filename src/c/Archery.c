@@ -745,6 +745,10 @@ static ArrowContext s_arrows_falling[MAX_ARROWS];
 // s_arrows_falling is just a circular buffer, no reserved slots
 static size_t s_arrows_falling_index = 0;  // the next slot in which to place a falling arrow
 
+static GPoint s_holes[MAX_ARROWS] = {0};  // circular buffer
+static uint16_t s_num_holes = 0;  // number of holes to draw
+static size_t s_holes_index = 0;  // the next slot in which to place an arrowhole
+
 
 static inline bool is_hour_hand(const ArrowContext* arrow) {
     return arrow - s_arrows == HOUR_ARROW_INDEX;
@@ -959,6 +963,11 @@ static void arrow_pull(ArrowContext* original_arrow) {
         // pull out in the direction of the arrow
         // note this velocity should be at least the length of the arrowpoint
         arrow->velocity = point_from_angle(GPointZero, arrow->angle, (PBL_DISPLAY_WIDTH < 200) ? 6 : 10);
+
+        // add a hole
+        s_holes_index = (s_holes_index + 1) % MAX_ARROWS;
+        s_holes[s_holes_index] = arrow_tip(s_layer_arrow, original_arrow);
+        s_num_holes = MAX(s_num_holes, MAX_ARROWS);
 
         layer_mark_dirty(s_layer_arrow);
     }
@@ -1387,9 +1396,22 @@ static void animate_fall(Layer* layer, GContext* ctx) {
     }
 }
 
+static void draw_holes(Layer* layer, GContext* ctx) {
+    graphics_context_set_antialiased(ctx, false);
+    graphics_context_set_fill_color(ctx, GColorDarkGray);
+    for (size_t i = 0; i < s_num_holes; i++) {
+        const GPoint* hole = &s_holes[(s_holes_index + MAX_ARROWS - i) % MAX_ARROWS];
+        graphics_fill_circle(ctx, *hole, 2);
+    }
+    graphics_context_set_antialiased(ctx, true);
+}
+
+
 // Callback to render s_layer_arrow
 static void arrow_canvas(Layer* layer, GContext* ctx) {
     PROFILE_START();
+
+    draw_holes(layer, ctx);
     animate_shots(layer, ctx);
     animate_fall(layer, ctx);
 

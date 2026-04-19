@@ -2,6 +2,7 @@
 
 ## 1.7
 
+- Arrows now leave holes in the target
 - Graphics performance optimisation
 
 ## 1.6
