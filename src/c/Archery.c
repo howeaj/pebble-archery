@@ -121,6 +121,13 @@ static int16_t s_demo_north = DEG_TO_TRIGANGLE(-65);
  Generic functions
 ******************************************************************************/
 
+// return milliseconds since the epoch
+static inline uint32_t timestamp_ms(void) {
+    time_t seconds = 0;
+    const uint32_t millis = (uint32_t)time_ms(&seconds, NULL);
+    return ((uint32_t)seconds * MS_PER_S) + millis;
+}
+
 // Single vibe for duration
 #if DISABLE_VIBE
     #define VIBE(duration) (void)duration
@@ -430,6 +437,8 @@ static void target_ripple_start(uint32_t delay_ms) {
     }
 }
 static void draw_target(Layer *layer, GContext *ctx) {
+    PROFILE_START();
+
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = grect_center_point(&bounds);
 
@@ -516,6 +525,8 @@ static void draw_target(Layer *layer, GContext *ctx) {
     if (s_target_ripple_frame == -1) {
         draw_clock_indices(&bounds, ctx);
     }
+
+    PROFILE_END("draw_target");
 }
 
 static Layer *s_layer_trophy;
@@ -1375,8 +1386,11 @@ static void animate_fall(Layer* layer, GContext* ctx) {
 
 // Callback to render s_layer_arrow
 static void arrow_canvas(Layer* layer, GContext* ctx) {
+    PROFILE_START();
     animate_shots(layer, ctx);
     animate_fall(layer, ctx);
+
+    PROFILE_END("arrow_canvas");
 }
 
 
