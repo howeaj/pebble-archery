@@ -1084,10 +1084,10 @@ static void demo_override_arrow_hits(ArrowContext* arrow) {
         if (counter > 2) {
             if (is_hour_hand(arrow)) {
                 arrow->color = GColorMagenta;
-                arrow->distance = 12;
+                arrow->distance = 20;
             } else {
                 arrow->color = PBL_IF_BW_ELSE(GColorBlack, GColorCyan);
-                arrow->distance = 34;
+                arrow->distance = 15;
             }
         } else if (counter > 0) {
             if (is_hour_hand(arrow)) {
