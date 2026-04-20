@@ -46,6 +46,7 @@
 #define FORCE_COMPASS (DEMO || false)  // fake compass calibrated
 #define FORCE_LUCK false  // always hit centre
 #define FORCE_BACKLIGHT_ON (DEMO || false)
+#define FORCE_BLUETOOTH_DISCONNECT false  // because emu-bt-connection takes forever
 #if DEMO
     #define IF_DEMO_ELSE(is_demo, not_demo) (is_demo)
 #else  // !DEMO
@@ -238,6 +239,29 @@ static void animate_scroll(Layer *layer, bool appear, bool from_below, bool* was
 
 
 /******************************************************************************
+ Bluetooth connection
+******************************************************************************/
+
+static bool s_was_bluetooth_connected = true;
+static bool s_is_bluetooth_connected = true;
+static void bluetooth_vibe_on_disconnect() {
+    if (s_was_bluetooth_connected && !s_is_bluetooth_connected) {
+        LOG("Vibing for bluetooth disconnect");
+        VIBE(500);
+    }
+    s_was_bluetooth_connected = s_is_bluetooth_connected;
+}
+
+static bool bluetooth_get_is_connected(void) {
+    s_is_bluetooth_connected = connection_service_peek_pebble_app_connection();
+#if FORCE_BLUETOOTH_DISCONNECT
+    s_is_bluetooth_connected = false;
+#endif // FORCE_BLUETOOTH_DISCONNECT
+    return s_is_bluetooth_connected;
+}
+
+
+/******************************************************************************
  Compass
 ******************************************************************************/
 
@@ -401,6 +425,7 @@ static Layer *s_layer_target;
 typedef struct Hole {
     uint16_t angle;
     uint16_t distance;  // from centre
+    bool is_passthrough;  // passthrough holes drawn differently to differentiate
 } Hole;
 static Hole s_holes[MAX_HOLES] = {0};  // circular buffer
 static size_t s_num_holes = 0;  // number of holes to draw
@@ -414,10 +439,11 @@ static inline GPoint hole_location(const Layer* layer, const Hole* hole) {
 }
 
 // Add a new arrowhole to the draw list
-static void add_hole(uint16_t angle, uint16_t distance) {
+static void add_hole(uint16_t angle, uint16_t distance, bool is_passthrough) {
     s_holes_index = (s_holes_index + 1) % MAX_HOLES;
     s_holes[s_holes_index].angle = angle;
     s_holes[s_holes_index].distance = distance;
+    s_holes[s_holes_index].is_passthrough = is_passthrough;
     s_num_holes = MIN(s_num_holes + 1, MAX_HOLES);
 }
 
@@ -428,8 +454,11 @@ static void draw_holes(Layer* layer, GContext* ctx, const int16_t offsets[TARGET
     graphics_context_set_fill_color(ctx, GColorDarkGray);
 #endif // PBL_COLOR
 
-    for (size_t hole_id = 0; hole_id < s_num_holes; hole_id++) {
-        Hole hole = s_holes[(s_holes_index + MAX_HOLES - hole_id) % MAX_HOLES];
+    int16_t passthrough_hole_index = -1;
+
+    for (size_t i = 0; i < s_num_holes; i++) {
+        const int16_t hole_index = (s_holes_index + MAX_HOLES - i) % MAX_HOLES;
+        Hole hole = s_holes[hole_index];  // take a copy to modify distance for a single frame
 #if PBL_BW
         graphics_context_set_fill_color(ctx, GColorWhite);
 #endif // PBL_BW
@@ -454,7 +483,16 @@ static void draw_holes(Layer* layer, GContext* ctx, const int16_t offsets[TARGET
             }
         }
 
+        if (hole.is_passthrough && (passthrough_hole_index == -1)) {  // save the latest passthrough to draw last
+            passthrough_hole_index = hole_index;
+        }
         graphics_fill_circle(ctx, hole_location(layer, &hole), 2);
+    }
+
+    // draw passthrough last so its always on top
+    if (passthrough_hole_index >= 0) {
+        graphics_context_set_fill_color(ctx, GColorBlack);
+        graphics_fill_circle(ctx, hole_location(layer, &s_holes[passthrough_hole_index]), 5);
     }
 }
 
@@ -777,7 +815,7 @@ typedef struct ArrowContext {
     // static attributes of the original shot
     ShotReason shot_reason;
     int32_t angle;  // in trigangle units
-    int32_t length;  // of shaft
+    int32_t length;  // of shaft sticking out of the target. 0 indicates a pass-through.
     int32_t distance;  // from centre
     GColor8 color;  // of fletchings
 
@@ -824,9 +862,12 @@ static inline bool is_hour_hand(const ArrowContext* arrow) {
 static inline bool is_minute_hand(const ArrowContext* arrow) {
     return arrow - s_arrows == MINUTE_ARROW_INDEX;
 }
-
+static inline bool is_passthrough(const ArrowContext* arrow) {
+    return arrow->length == 0;
+}
 
 static inline bool arrow_spam_is_shooting(void);  // TODO move
+static void arrow_pull(ArrowContext* original_arrow);
 
 // triggering_arrow is the arrow whose shot completion triggered this check
 static void check_achievement_completion(ArrowContext* triggering_arrow) {
@@ -875,8 +916,9 @@ static inline bool arrow_should_draw(const ArrowContext* arrow) {
 }
 
 // Draw the arrow. Return true if it was on-screen.
+// Note if the arrow is a pass-through, only the arrow's fletchings are drawn,
+// and it is immediately pulled, to give the effect of stripping the fletches.
 static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t wobble_deg, bool point) {
-
     // 3 degrees is required to visibly wobble when the arrow is straight vertical/horizontal
     if (wobble_deg != 0) {
         const int32_t angle_deg_wrap_90 = TRIGANGLE_TO_DEG(arrow->angle) % 90;
@@ -895,21 +937,23 @@ static bool draw_arrow(Layer *layer, GContext *ctx, ArrowContext* arrow, int16_t
     // shaft
     const GPoint tip = arrow_tip(layer, arrow);
     const GPoint tail = point_from_angle(tip, shaft_angle, arrow->length);
-    const GColor shaft_color = (arrow->shot_reason == SHOT_REASON_COMPASS) ? GColorDarkCandyAppleRed : GColorWood;
-    graphics_context_set_stroke_width(ctx, 2);
-    graphics_context_set_stroke_color(ctx, shaft_color);
-    graphics_draw_line(ctx, tip, tail);
+    if (!is_passthrough(arrow)) {
+        const GColor shaft_color = (arrow->shot_reason == SHOT_REASON_COMPASS) ? GColorDarkCandyAppleRed : GColorWood;
+        graphics_context_set_stroke_width(ctx, 2);
+        graphics_context_set_stroke_color(ctx, shaft_color);
+        graphics_draw_line(ctx, tip, tail);
 
-    // point
-    if (point) {
-        graphics_context_set_stroke_color(ctx, GColorLightGray);
+        // point
+        if (point) {
+            graphics_context_set_stroke_color(ctx, GColorLightGray);
 
-        const GPoint shaft_end = point_from_angle(tip, shaft_angle, -4);
-        graphics_draw_line(ctx, tip, shaft_end);
+            const GPoint shaft_end = point_from_angle(tip, shaft_angle, -4);
+            graphics_draw_line(ctx, tip, shaft_end);
 
-        const GPoint point_end = point_from_angle(tip, shaft_angle, -6);
-        graphics_context_set_stroke_width(ctx, 1);
-        graphics_draw_line(ctx, shaft_end, point_end);
+            const GPoint point_end = point_from_angle(tip, shaft_angle, -6);
+            graphics_context_set_stroke_width(ctx, 1);
+            graphics_draw_line(ctx, shaft_end, point_end);
+        }
     }
 
     // fletch
@@ -949,7 +993,9 @@ static void arrow_hit_effects(ArrowContext* arrow) {
     if (!arrow->hit_effects_started) {
         arrow->hit_effects_started = true;
         // vibe
-        if ((arrow->shot_reason != SHOT_REASON_TICK) && (arrow->shot_reason != SHOT_REASON_SPAM)) {
+        if (is_passthrough(arrow)) {
+            bluetooth_vibe_on_disconnect();
+        } else if ((arrow->shot_reason != SHOT_REASON_TICK) && (arrow->shot_reason != SHOT_REASON_SPAM)) {
             if ((DEMO && (arrow->distance < 10) && (arrow->shot_reason != SHOT_REASON_COMPASS)) || arrow->achievements != 0) {
                 VIBE(300);
             } else {
@@ -963,7 +1009,12 @@ static void arrow_hit_effects(ArrowContext* arrow) {
 
 // Initial hit and wobble anticlockwise
 static void arrow_frame_2(Layer *layer, GContext *ctx, ArrowContext* arrow) {
-    draw_arrow(layer, ctx, arrow, -1, false);
+    if (is_passthrough(arrow)) {  // passthrough
+        arrow_pull(arrow);
+    }
+    else{
+        draw_arrow(layer, ctx, arrow, -1, false);
+    }
 
 #if !DEBUG
     arrow_hit_effects(arrow);
@@ -1032,7 +1083,7 @@ static void arrow_pull(ArrowContext* original_arrow) {
         // note this velocity should be at least the length of the arrowpoint
         arrow->velocity = point_from_angle(GPointZero, arrow->angle, (PBL_DISPLAY_WIDTH < 200) ? 6 : 10);
 
-        add_hole(arrow->angle, arrow->distance);
+        add_hole(arrow->angle, arrow->distance, is_passthrough(arrow));
 
         layer_mark_dirty(s_layer_arrow);
     }
@@ -1314,7 +1365,9 @@ static bool evaluate_achievement_compass(ArrowContext *arrow, int32_t max_distan
 static void arrow_determine_accuracy(ArrowContext *arrow) {
     ASSERT(arrow->distance == ARROW_DISTANCE_UNINITIALISED);
 
+    // Note; by default, a white hit is reserved for low-battery
     int32_t max_distance = TARGET_RADIUS - SCOREBAND_WIDTH;
+
     if (is_hour_hand(arrow)) {  // ensure hour always on-screen
         // TODO allow further in the corners of rect screens
         max_distance = (MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) / 2) - arrow->length;
@@ -1358,12 +1411,20 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
         max_distance = SCOREBAND_WIDTH - arrow_width;
     } else {
         if (is_minute_hand(arrow) && is_low_battery()) {
+            // indicate low battery by hitting the white ring
             min_distance = TARGET_RADIUS - SCOREBAND_WIDTH;
             max_distance = TARGET_RADIUS - (SCOREBAND_WIDTH / 2);
         } else {
             min_distance = SCOREBAND_WIDTH + arrow_width;
             max_distance = clue_distance;
         }
+    }
+    if (is_hour_hand(arrow) && !bluetooth_get_is_connected()) {
+        LOG("Bluetooth disconnect arrow");
+        // indicate bluetooth disconnect with a pass-through
+        arrow->length = 0;
+        // a pass-through is a black hole, so make sure its not in the black scoring ring
+        max_distance = MIN(max_distance, MIN(clue_distance, (SCOREBAND_WIDTH * 3) - arrow_width));
     }
 
 #if DEMO

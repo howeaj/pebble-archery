@@ -2,6 +2,7 @@
 
 ## 1.9
 
+- Bluetooth disconnect indicated by vibe and the hour hand passing through the target, leaving a large hole and its fletchings behind.
 - Fix app launch icon for black&white platforms
 
 ## 1.8
