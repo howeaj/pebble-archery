@@ -1,7 +1,7 @@
 {
   "name": "Archery",
   "author": "howeaj",
-  "version": "1.8",
+  "version": "1.9",
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
@@ -28,10 +28,18 @@
     "resources": {
       "media": [
         {
-          "menuIcon": true,
+          "file": "app_icon.png",
           "type": "bitmap",
           "name": "APP_ICON",
-          "file": "app_icon.png"
+          "memoryFormat": "1Bit",
+          "menuIcon": true,
+          "targetPlatforms": ["aplite", "diorite", "flint"]
+        },
+        {
+          "file": "app_icon.png",
+          "type": "bitmap",
+          "name": "APP_ICON",
+          "targetPlatforms": ["basalt", "chalk", "emery", "gabbro"]
         },
         {
           "type": "bitmap",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9
+
+- Fix app launch icon for black&white platforms
+
 ## 1.8
 
 - Bugfix extra central arrowhole
