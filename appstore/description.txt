@@ -3,12 +3,13 @@ Watch out! Tiny archers are shooting your wrist, but luckily the arrows always p
 A fun animated watchface, compass and game with secrets to discover.
 
 Features:
-    Analogue time; long minute arrow, short hour arrow
-    Low battery (<20%) warning; the minute arrow always hits the outermost ring.
-    Bluetooth disconnect warning; vibe and the hour arrow pierces through the target, leaving behind a large black hole
-    Compass; shake to shoot a red arrow which arrives from the north
+ - Analogue time; long minute arrow, short hour arrow
+ - Low battery (<20%) warning; the minute arrow always hits the outermost ring.
+ - Bluetooth disconnect warning; vibe and the hour arrow pierces through the target, leaving behind a large black hole
+ - Compass; shake to shoot a red arrow which arrives from the north
+ - Achievements; complete certain conditions to unlock trophies
 
-Instructions:
+Game instructions:
  - Shake to enable the red compass arrow
  - Quickly turn your Pebble to align the hour and minute arrows with North as they arrive to score a perfect hit.
  - Get both arrows perfectly in the centre together for a small surprise.
