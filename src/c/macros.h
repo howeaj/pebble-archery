@@ -1,4 +1,10 @@
-/// Generic C macros.
+// Copyright (c) 2026 Andrew Howe. All rights reserved. See LICENSE (GPLv3.0).
+
+// Generic C macros.
+
+#pragma once
+
+#include "debug.h"
 
 // Macros
 #define MACRO_START do {
