@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10
+
+- Config options: enable/disable compass, accelerometer, trophies and seconds
+
 ## 1.9
 
 - Bluetooth disconnect indicated by vibe and the hour hand passing through the target, leaving a large hole and its fletchings behind.

@@ -6,14 +6,18 @@
 
 #include "compass.h"
 
+#include <pebble.h>
+
 #include "font.h"
 #include "macros.h"
 #include "misc.h"
 
 
-static TextLayer* s_layer_status_text;
-
 #define COMPASS_CALIB_POLL_RATE_MS (2000)  // how often to check progress while calibrating. Must be < PEEK_TIMEOUT_MS.
+
+static TextLayer* s_layer_status_text;
+static AppTimer* s_calib_timer;
+
 
 static void show_status_message(bool show){
     static AnimateScrollState state = AnimateScrollState_Init;
@@ -69,11 +73,12 @@ static void compass_calibrate_callback(void* context) {
     if (compass_service_peek_logged(&data)) {
         LOG("Compass calibration complete");
         show_status_message(false);
+        s_calib_timer = NULL;
     } else {
         if (data.compass_status == CompassStatusCalibrating) {
             text_layer_set_text(s_layer_status_text, "keep moving! compass calibrating");
         }
-        app_timer_register(COMPASS_CALIB_POLL_RATE_MS, compass_calibrate_callback, NULL);
+        s_calib_timer = app_timer_register(COMPASS_CALIB_POLL_RATE_MS, compass_calibrate_callback, NULL);
     }
 }
 
@@ -81,7 +86,16 @@ void compass_start_calibration(void) {
     LOG("Starting compass calibration");
     text_layer_set_text(s_layer_status_text, "move wrist to calibrate compass");
     show_status_message(true);
-    app_timer_register(COMPASS_CALIB_POLL_RATE_MS, compass_calibrate_callback, NULL);
+    s_calib_timer = app_timer_register(COMPASS_CALIB_POLL_RATE_MS, compass_calibrate_callback, NULL);
+}
+
+void compass_stop_calibration(void) {
+    if (s_calib_timer != NULL) {
+        show_status_message(false);
+        app_timer_cancel(s_calib_timer);
+        s_calib_timer = NULL;
+        compass_service_unsubscribe();
+    }
 }
 
 

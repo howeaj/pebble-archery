@@ -27,7 +27,6 @@
     user config options
         reduce arrow randomness
         vibe options
-        turn off accel/compass features
 
         carbon/aluminium/wooden arrows
         different faces
@@ -37,9 +36,11 @@
 #include <pebble.h>
 
 #include "compass.h"
+#include "config.h"
 #include "font.h"
 #include "macros.h"
 #include "misc.h"
+#include "persist_keys.h"
 
 static Window *s_window;
 static bool s_initialising = true;
@@ -154,23 +155,17 @@ typedef enum Achievement {
   ACHIEVEMENT_MAX,  // end-of-enum indicator; the number of achievements
 } Achievement;
 
+#define PERSIST_ACHIEVEMENTS_VERSION (1)  // The current version of PERSIST_KEY_ACHIEVEMENTS's data
 Achievements s_achievements = 0;  // The user's obtained achievements. Stored persistently.
 
-#define PERSIST_VERSION (1)  // The current persistent storage version
-
-// persistent storage keys
-#define PERSIST_KEY_VERSION (0)  // key for the version of the remaining storage layout
-#define PERSIST_KEY_ACHIEVEMENTS (1)  // key for s_achievements
-
-
-static bool is_persist_written_and_current_version(void) {
-    return persist_read_int(PERSIST_KEY_VERSION) == PERSIST_VERSION;
+static bool is_achievements_written_and_current_version(void) {
+    return persist_read_int(PERSIST_KEY_ACHIEVEMENTS_VERSION) == PERSIST_ACHIEVEMENTS_VERSION;
 }
 
 /// Return true if achievements were loaded
 static bool achievements_load(void) {
     StatusCode status = E_DOES_NOT_EXIST;
-    if (is_persist_written_and_current_version()){
+    if (is_achievements_written_and_current_version()){
         status = persist_read_data(PERSIST_KEY_ACHIEVEMENTS, &s_achievements, sizeof(s_achievements));
         ASSERT(status == sizeof(s_achievements));
     }
@@ -182,7 +177,7 @@ static void achievements_save(void) {
     ASSERT(status == sizeof(s_achievements));
 
     if (status == sizeof(s_achievements)) {
-        status = persist_write_int(PERSIST_KEY_VERSION, PERSIST_VERSION);
+        status = persist_write_int(PERSIST_KEY_ACHIEVEMENTS_VERSION, PERSIST_ACHIEVEMENTS_VERSION);
         ASSERT(status == sizeof(int32_t));
     }
 }
@@ -192,7 +187,7 @@ static void achievements_save(void) {
 //     StatusCode status = persist_delete(PERSIST_KEY_ACHIEVEMENTS);
 //     ASSERT((status == S_TRUE) || (status == E_DOES_NOT_EXIST));
 
-//     status = persist_delete(PERSIST_KEY_VERSION);
+//     status = persist_delete(PERSIST_KEY_ACHIEVEMENTS_VERSION);
 //     ASSERT((status == S_TRUE) || (status == E_DOES_NOT_EXIST));
 // }
 
@@ -444,6 +439,10 @@ static Layer *s_layer_trophy;
 static GBitmap* s_icon_trophy;
 
 static void draw_trophies(Layer *layer, GContext *ctx){
+    if (!config_get()->showTrophies) {
+        return;
+    }
+
     const int16_t num_trophies = num_achievements();
     if (num_trophies == 0){
         return;
@@ -1202,16 +1201,21 @@ static void arrow_determine_accuracy(ArrowContext *arrow) {
     // If you get close to a condition, they give a clue by reducing the max distance.
     int32_t clue_distance = max_distance;
     if (shot_reason_is_manual(arrow->shot_reason)) {
-        CompassHeadingData compass = {0};
-        const bool compass_valid = PBL_IF_COMPASS_ELSE(compass_service_peek_logged(&compass), false);
-        AccelData accel = {0};
-        const bool accel_valid = accel_service_peek_logged(&accel);
 
-        if (compass_valid) {
-            hit_centre |= evaluate_achievement_compass(arrow, max_distance, &clue_distance, &compass);
+        if (config_get()->enableCompass) {
+            CompassHeadingData compass = {0};
+            const bool compass_valid = PBL_IF_COMPASS_ELSE(compass_service_peek_logged(&compass), false);
+            if (compass_valid) {
+                hit_centre |= evaluate_achievement_compass(arrow, max_distance, &clue_distance, &compass);
+            }
         }
-        if (accel_valid) {
-            hit_centre |= evaluate_achievement_upright(arrow, max_distance, &clue_distance, &accel);
+
+        if (config_get()->enableAccel) {
+            AccelData accel = {0};
+            const bool accel_valid = accel_service_peek_logged(&accel);
+            if (accel_valid) {
+                hit_centre |= evaluate_achievement_upright(arrow, max_distance, &clue_distance, &accel);
+            }
         }
     }
 
@@ -1383,13 +1387,13 @@ static void shoot_indicator_arrows_for_time(struct tm *tick_time, TimeUnits unit
     // How many MS_PER_ARROW_SHOOT_FRAMES to delay after pulling the arrow
     int16_t delay = 1;
 
-#if SECOND_HAND
-    if (units_changed & SECOND_UNIT) {
-        const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
-        arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, shot_reason);
-        delay++;
+    if (config_get()->enableSeconds) {
+        if (units_changed & SECOND_UNIT) {
+            const int32_t angle = s_state.sec * (TRIG_MAX_ANGLE / SECONDS_PER_MINUTE);
+            arrow_shoot(&s_arrows[SECOND_ARROW_INDEX], angle, ARROW_LENGTH_LONG, delay, shot_reason);
+            delay++;
+        }
     }
-#endif // SECOND_HAND
 
     if (units_changed & MINUTE_UNIT) {
         { // hours
@@ -1437,7 +1441,7 @@ static void start_shoot_sequence(struct tm *tick_time, TimeUnits units_changed, 
     // compass arrow hits
 #if PBL_COMPASS
     if (shot_reason == SHOT_REASON_SHAKE) {
-        if (shoot_compass_arrow()) {
+        if (config_get()->enableCompass && shoot_compass_arrow()) {
             delay_ms += MS_PER_ARROW_SHOOT_FRAME; // arrow hits on second frame
         }
     }
@@ -1472,6 +1476,28 @@ static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
     }
 }
 
+static void update_tick_timer_service_subscription(void) {
+    tick_timer_service_unsubscribe();
+    tick_timer_service_subscribe(config_get()->enableSeconds ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
+}
+
+static void new_config_handler(void) {
+    // enableCompass
+#if PBL_COMPASS
+    if (!config_get()->enableCompass) {
+        compass_stop_calibration();
+    }
+#endif // PBL_COMPASS
+
+    // enableAccel - no action needed
+
+    // enableSeconds
+    update_tick_timer_service_subscription();
+
+    // showTrophies
+    layer_mark_dirty(s_layer_trophy);
+}
+
 
 /******************************************************************************
  Main
@@ -1479,6 +1505,8 @@ static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
 
 static void main_window_load(Window *window) {
     TRACE("main_window_load");
+
+    config_init(new_config_handler);
 
     Layer * const window_layer = window_get_root_layer(window);
 
@@ -1504,7 +1532,7 @@ static void main_window_load(Window *window) {
     layer_add_child(window_layer, compass_text_layer_create(window_layer));
 #endif // PBL_COMPASS
 
-    tick_timer_service_subscribe(SECOND_HAND ? SECOND_UNIT : MINUTE_UNIT, tick_handler);
+    update_tick_timer_service_subscription();
     accel_tap_service_subscribe(accel_tap_handler);
 
     achievements_load();
@@ -1531,6 +1559,8 @@ static void main_window_unload(Window *window) {
 
     tick_timer_service_unsubscribe();
     accel_tap_service_unsubscribe();
+
+    config_deinit();
 }
 
 static void init(void) {

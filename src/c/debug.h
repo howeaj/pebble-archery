@@ -8,7 +8,6 @@
 
 #define DEMO false
 #define DEBUG false
-#define SECOND_HAND false
 #define DISABLE_VIBE false
 #define FORCE_COMPASS (DEMO || false)  // fake compass calibrated
 #define FORCE_LUCK false  // always hit centre

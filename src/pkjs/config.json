@@ -1,0 +1,47 @@
+[
+  {
+    "type": "heading",
+    "defaultValue": "Archery watchface settings"
+  },
+  {
+    "type": "toggle",
+    "messageKey": "enableCompass",
+    "label": "Compass",
+    "description": "Shoot a red arrow indicating North on shake (required for 'NORTH STAR' trophy)",
+    "defaultValue": true,
+    "capabilities": ["NOT_PLATFORM_DIORITE"]
+  },
+  {
+    "type": "toggle",
+    "messageKey": "noCompass",
+    "label": "Compass (not present on Pebble 2)",
+    "description": "Shoot a red arrow indicating North on shake (required for 'NORTH STAR' trophy)",
+    "defaultValue": false,
+    "capabilities": ["PLATFORM_DIORITE"]
+  },
+  {
+    "type": "toggle",
+    "messageKey": "enableAccel",
+    "label": "Accelerometer",
+    "description": "Check orientation and motion on each shot (required for 'PERFECT SETUP' trophy)",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "showTrophies",
+    "label": "Show trophies",
+    "description": "Show discovered trophies",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "enableSeconds",
+    "label": "Seconds arrow",
+    "description": "Shoot an arrow every second. WARNING: HIGH POWER USAGE!",
+    "defaultValue": false
+  },
+  {
+    "type": "submit",
+    "defaultValue": "Save"
+  }
+]

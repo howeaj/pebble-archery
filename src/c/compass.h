@@ -17,5 +17,6 @@ Layer* compass_text_layer_create(Layer * parent);
 void compass_text_layer_destroy(void);
 bool compass_service_peek_logged(CompassHeadingData* data);
 void compass_start_calibration(void);
+void compass_stop_calibration(void);
 
 #endif // PBL_COMPASS

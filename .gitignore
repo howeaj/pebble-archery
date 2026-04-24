@@ -1,5 +1,6 @@
+*.svg
+*.xcf
 .lock-waf_linux_build
 /build
-*.xcf
+/node_modules
 day*.gif
-*.svg

@@ -1,15 +1,22 @@
 {
   "name": "Archery",
   "author": "howeaj",
-  "version": "1.9",
-  "keywords": ["pebble-app"],
+  "version": "1.10",
+  "keywords": [
+    "pebble-app"
+  ],
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "@rebble/clay": "^1.0.8"
+  },
   "pebble": {
     "displayName": "Archery",
     "uuid": "5ec8c7a7-978f-4c99-a367-cafefdadba57",
     "sdkVersion": "3",
     "enableMultiJS": true,
+    "capabilities": [
+      "configurable"
+    ],
     "targetPlatforms": [
       "aplite",
       "basalt",
@@ -23,7 +30,10 @@
       "watchface": true
     },
     "messageKeys": [
-      "dummy"
+      "enableCompass",
+      "enableAccel",
+      "showTrophies",
+      "enableSeconds"
     ],
     "resources": {
       "media": [
@@ -33,13 +43,22 @@
           "name": "APP_ICON",
           "memoryFormat": "1Bit",
           "menuIcon": true,
-          "targetPlatforms": ["aplite", "diorite", "flint"]
+          "targetPlatforms": [
+            "aplite",
+            "diorite",
+            "flint"
+          ]
         },
         {
           "file": "app_icon.png",
           "type": "bitmap",
           "name": "APP_ICON",
-          "targetPlatforms": ["basalt", "chalk", "emery", "gabbro"]
+          "targetPlatforms": [
+            "basalt",
+            "chalk",
+            "emery",
+            "gabbro"
+          ]
         },
         {
           "type": "bitmap",
