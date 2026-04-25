@@ -653,7 +653,7 @@ static ArrowContext s_arrows[MAX_ARROWS];
 #define MINUTE_ARROW_INDEX  (1)
 #define SECOND_ARROW_INDEX  (2)
 #define COMPASS_ARROW_INDEX (3)
-#define FIRST_SPAM_ARROW_INDEX (2)  // the remaining arrows < MAX_ARROWS are used for arrow spam
+#define FIRST_SPAM_ARROW_INDEX (3)  // the remaining arrows < MAX_ARROWS are used for arrow spam
 
 #define LAST_ARROW_SHOT MINUTE_ARROW_INDEX  // the last arrow to be shot on each regular round
 
@@ -840,8 +840,6 @@ static void arrow_frame_3(Layer *layer, GContext *ctx, ArrowContext* arrow) {
     arrow_hit_effects(arrow);
 #endif // DEBUG
 }
-
-static void arrow_pull(ArrowContext* original_arrow); // TODO move
 
 // Final resting state
 static void arrow_frame_4(Layer *layer, GContext *ctx, ArrowContext* arrow) {
@@ -1493,6 +1491,9 @@ static void new_config_handler(void) {
 
     // enableSeconds
     update_tick_timer_service_subscription();
+    if (!config_get()->enableSeconds) {
+        arrow_pull(&s_arrows[SECOND_ARROW_INDEX]);
+    }
 
     // showTrophies
     layer_mark_dirty(s_layer_trophy);
