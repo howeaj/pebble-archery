@@ -31,6 +31,7 @@
     },
     "messageKeys": [
       "enableCompass",
+      "noCompass",
       "enableAccel",
       "showTrophies",
       "enableSeconds"
